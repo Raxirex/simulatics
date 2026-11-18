@@ -9,6 +9,7 @@ from pathlib import Path
 import mujoco
 import numpy as np
 
+from ..control import ManualController, PolicyController, base_pose
 from ..models import HumanoidParams, PARAM_SPEC, build_mjcf
 from ..plan import GridMap, Navigator
 from ..sim.sensors import CameraRig, Lidar, LidarConfig
@@ -16,6 +17,19 @@ from ..sim.task import LocoTask, TaskConfig, has_free_root
 from ..train.policy import Policy
 
 _GEOM_NAMES = {int(getattr(mujoco.mjtGeom, n)): n[7:].lower() for n in dir(mujoco.mjtGeom) if n.startswith("mjGEOM_")}
+
+
+def _jsonable(v):
+    """numpy scalars/arrays inside controller status dicts -> plain JSON types."""
+    if isinstance(v, dict):
+        return {k: _jsonable(x) for k, x in v.items()}
+    if isinstance(v, (list, tuple)):
+        return [_jsonable(x) for x in v]
+    if isinstance(v, np.ndarray):
+        return np.round(v, 4).tolist()
+    if isinstance(v, np.generic):
+        return v.item()
+    return v
 
 
 def _b64(a: np.ndarray) -> str:
@@ -34,12 +48,17 @@ class SimSession:
         self.lock = threading.RLock()
         self.params = HumanoidParams()
         self.obstacles: list[dict] = []
+        self.props: list[dict] = []      # graspable free bodies (cubes, balls)
+        self.arms = None                 # ArmController when the robot has hands
         self.custom_path: str | None = None
+        self.cad_xml: str | None = None  # MJCF with CAD meshes / masses (Design tab), replaces the generated model
         self.task_cfg = TaskConfig()
         self.lidar_cfg = LidarConfig()
         self.camera_cfg = {"enabled": False, "name": "head_cam", "depth": False}
         self.policy: Policy | None = None
         self.policy_name = ""
+        self.controller_kind = "auto"    # auto | walker | rl | es-policy | manual
+        self.controller = None
         self.running = False
         self.speed = 1.0
         self.auto_reset = True
@@ -59,6 +78,12 @@ class SimSession:
         self._rig_version = -1
         self._alive = True
         self._step_once = False
+        from .robot_adapter import SessionRobot
+        from ..llm import PilotRunner
+        self.robot = SessionRobot(self)  # RobotInterface for AI pilots
+        self.pilot = PilotRunner(self.robot)
+        self.rl_policy = None            # PPO / distilled policy (train/ppo.py RLPolicy)
+        self._arm_tick = 0
         self.build()
         self._thread = threading.Thread(target=self._loop, name="sim", daemon=True)
         self._thread.start()
@@ -66,21 +91,70 @@ class SimSession:
     # ---- model construction ---------------------------------------------
     def build(self) -> None:
         """(Re)compile the model from the current parameters / file and reset the simulation."""
+        if getattr(self, "pilot", None) is not None and self.pilot.running:
+            self.pilot.stop(timeout=0.5)  # its goals and object names refer to the old world
         with self.lock:
             if self.custom_path:
                 model = mujoco.MjModel.from_xml_path(self.custom_path)
+            elif self.cad_xml:
+                model = mujoco.MjModel.from_xml_string(self.cad_xml)
             else:
-                model = mujoco.MjModel.from_xml_string(build_mjcf(self.params, self.obstacles))
+                model = mujoco.MjModel.from_xml_string(self.generated_xml())
             self.model, self.data = model, mujoco.MjData(model)
             self.task = LocoTask(model, self.task_cfg) if has_free_root(model) and model.nu > 0 else None
             self.manual_ctrl = self.task.ctrl0.copy() if self.task else np.zeros(model.nu)
             self.lidar = Lidar(model, self.lidar_cfg)
+            self.arms = self._make_arms()
+            self.controller = self._make_controller()
             self.reset()
             self.grid.rasterize_truth(model, self.data)
             self.grid.reset_lidar()
-            self.nav.path = np.zeros((0, 2))
+            self.nav.clear()
             self.scene_version += 1
             self.map_seq += 1
+
+    def generated_xml(self) -> str:
+        """MJCF of the built-in robot with the current world objects and props."""
+        if self.props:
+            return build_mjcf(self.params, self.obstacles, props=self.props)
+        return build_mjcf(self.params, self.obstacles)
+
+    def _make_arms(self):
+        try:
+            from ..control.arms import ArmController
+        except ImportError:
+            return None
+        try:
+            if not ArmController.supports(self.model):
+                return None
+            return ArmController(self.model, self.data)
+        except Exception:  # noqa: BLE001 - model without hands / arms: no arm skills
+            return None
+
+    def _make_controller(self):
+        """Pick the controller for the current model: an explicit choice if it is possible, else the best available."""
+        m, kind = self.model, self.controller_kind
+        if self.task is None:
+            return ManualController(m, self.manual_ctrl)
+        if self.policy is not None and kind in ("auto", "es-policy"):
+            return PolicyController(m, self.policy, self.task)
+        if getattr(self, "rl_policy", None) is not None and kind in ("auto", "rl"):
+            from ..train.ppo import RLController
+            return RLController(m, self.rl_policy)
+        if kind in ("auto", "walker"):
+            try:
+                from ..control.walker import WalkController
+                if WalkController.supports(m):
+                    return WalkController(m)
+            except ImportError:
+                pass
+        return ManualController(m, self.manual_ctrl)
+
+    def set_controller(self, kind: str) -> None:
+        with self.lock:
+            self.controller_kind = kind
+            self.controller = self._make_controller()
+            self.reset()
 
     def reset(self) -> None:
         with self.lock:
@@ -90,11 +164,20 @@ class SimSession:
                 mujoco.mj_resetData(self.model, self.data)
             mujoco.mj_forward(self.model, self.data)
             self.falls = getattr(self, "falls", 0)
+            if self.controller is not None:
+                self.controller.reset(self.model, self.data)
+                self.controller.set_path(None)
+            if self.arms is not None:
+                self.arms = self._make_arms()  # fresh arm state (nothing held, arms home)
+            if hasattr(self, "nav"):
+                self.nav.clear()
+                self.nav.take_new_path()
 
     def set_params(self, d: dict) -> None:
         with self.lock:
             self.params = HumanoidParams.from_dict({**self.params.to_dict(), **d})
             self.custom_path = None
+            self.cad_xml = None
             self.build()
 
     def load_file(self, path: str) -> None:
@@ -115,27 +198,55 @@ class SimSession:
     def export_xml(self) -> str:
         if self.custom_path:
             return Path(self.custom_path).read_text()
-        return build_mjcf(self.params, self.obstacles)
+        return self.cad_xml or self.generated_xml()
 
     # ---- obstacles -------------------------------------------------------
     def random_obstacles(self, n: int = 12, seed: int | None = None) -> None:
         from ..sim.scene import random_objects
         obs = random_objects(n, seed)
         with self.lock:
-            self.obstacles = obs
+            self.obstacles, self.props, self.cad_xml = obs, [], None
+            if not self.custom_path:
+                self.build()
+
+    def manipulation_scene(self, seed: int | None = None) -> None:
+        """A table in front of the robot with small graspable objects on it."""
+        from ..sim.scene import manipulation_scene
+        obstacles, props = manipulation_scene(seed)
+        with self.lock:
+            self.obstacles, self.props, self.cad_xml = obstacles, props, None
             if not self.custom_path:
                 self.build()
 
     def clear_obstacles(self) -> None:
         with self.lock:
-            self.obstacles = []
+            self.obstacles, self.props, self.cad_xml = [], [], None
             if not self.custom_path:
                 self.build()
 
     # ---- policy ----------------------------------------------------------
     def load_policy(self, path: str) -> None:
+        from ..train.ppo import RLPolicy, is_rl_policy
+        if is_rl_policy(path):
+            pol = RLPolicy.load(path)
+            with self.lock:
+                meta = pol.meta or {}
+                if not meta.get("custom_model") and meta.get("humanoid"):
+                    self.params = HumanoidParams.from_dict(meta["humanoid"])
+                    self.custom_path = None
+                    self.cad_xml = None
+                self.policy, self.rl_policy = None, pol
+                self.policy_name = Path(path).parent.name
+                self.controller_kind = "rl"
+                self.build()  # _make_controller picks RLController (raises if joints differ)
+                if getattr(self.controller, "name", "") != "rl":
+                    self.rl_policy, self.policy_name, self.controller_kind = None, "", "auto"
+                    self.controller = self._make_controller()
+                    raise ValueError("learned policy does not match this robot (different leg joints)")
+            return
         pol = Policy.load(path)
         with self.lock:
+            self.rl_policy = None
             meta = pol.meta
             if not meta.get("custom_model") and "humanoid" in meta:
                 # the policy was trained on (possibly evolved) body parameters: adopt them
@@ -147,10 +258,18 @@ class SimSession:
             if self.task is None or pol.spec.sizes[0] != self.task.obs_dim or pol.spec.sizes[-1] != self.task.act_dim:
                 raise ValueError("policy does not match this robot (different joints/actuators)")
             self.policy, self.policy_name = pol, Path(path).parent.name
+            self.controller_kind = "es-policy"
+            self.controller = self._make_controller()
+            self.reset()
 
     def unload_policy(self) -> None:
         with self.lock:
             self.policy, self.policy_name = None, ""
+            self.rl_policy = None
+            if self.controller_kind in ("es-policy", "rl"):
+                self.controller_kind = "auto"
+            self.controller = self._make_controller()
+            self.reset()
 
     # ---- motors ----------------------------------------------------------
     def actuators(self) -> list[dict]:
@@ -224,8 +343,9 @@ class SimSession:
                 rgba = m.geom_rgba[g].tolist()
                 if m.geom_matid[g] >= 0 and not self.custom_path is None:
                     rgba = m.mat_rgba[m.geom_matid[g]].tolist()
+                robot = m.nbody > 1 and m.body_rootid[m.geom_bodyid[g]] == m.body_rootid[1] and m.geom_bodyid[g] != 0
                 item = {"type": _GEOM_NAMES.get(t, "none"), "size": m.geom_size[g].tolist(), "rgba": rgba,
-                        "group": int(m.geom_group[g]), "name": m.geom(g).name, "robot": bool(m.geom_bodyid[g] != 0)}
+                        "group": int(m.geom_group[g]), "name": m.geom(g).name, "robot": bool(robot)}
                 if t == mujoco.mjtGeom.mjGEOM_MESH:
                     mid = int(m.geom_dataid[g])
                     item["mesh"] = mid
@@ -262,45 +382,56 @@ class SimSession:
                 "policy": self.policy_name, "heading": round(self.heading, 3),
                 "touch": touch, "nav": self.nav.to_dict(), "error": self.error,
                 "camera_error": self.camera_error,
+                "controller": {"name": getattr(self.controller, "name", "none"), "kind": self.controller_kind,
+                               **_jsonable(self.controller.status() if self.controller else {})},
+                "arms": _jsonable(self.arms.status()) if self.arms is not None else None,
+                "pilot": self.pilot.brief(),
             }
 
     # ---- simulation thread -----------------------------------------------
-    def shutdown(self) -> None:
+    def shutdown(self, timeout: float = 3.0) -> None:
+        """Stop the simulation thread; it frees its own GL renderers before exiting."""
         self._alive = False
+        if threading.current_thread() is not self._thread and self._thread.is_alive():
+            self._thread.join(timeout)
 
     def step_once(self) -> None:
         self._step_once = True
 
     def _control_step(self) -> None:
-        m, d, task = self.model, self.data, self.task
-        if task is None:
-            d.ctrl[:] = self.manual_ctrl
-            mujoco.mj_step(m, d, 4)
+        m, d, task, c = self.model, self.data, self.task, self.controller
+        if task is not None:
+            x, y, yaw = base_pose(d)
+            self.nav.tick((x, y), yaw, c.status())
+            new = self.nav.take_new_path()
+            if new is not None:
+                c.set_path(*new)
+            if isinstance(c, PolicyController):
+                c.heading = self.heading
+        c.step(m, d)
+        if self.arms is not None:
+            # Only arms that received a command write ctrl, so idle arms keep the Motors-tab targets.
+            # The arm IK runs at its own (lower) rate; it times itself from data.time.
+            self._arm_tick += 1
+            every = max(1, int(round(self.arms.control_dt / c.control_dt)))
+            if self._arm_tick % every == 0:
+                self.arms.step(m, d)
+        mujoco.mj_step(m, d, max(1, int(round(c.control_dt / m.opt.timestep))))
+        if task is None or isinstance(c, ManualController):
             return
-        qpos, qvel = d.qpos[None].copy(), d.qvel[None].copy()
-        yaw, up = LocoTask.yaw_up(qpos)
-        cmd = self.nav.tick(qpos[0, :2], float(yaw[0]))
-        target = self.heading if cmd is None else cmd
-        if self.policy is not None:
-            if cmd is None and not self.nav.goals and self.nav.message == "goal reached":
-                d.ctrl[:] = task.ctrl0          # arrived: stand still
-            else:
-                # never ask for a sharper turn than the policy saw in training:
-                # it then turns step by step instead of being pushed out of distribution
-                limit = max(0.3, float(self.policy.meta.get("heading_range", 0.5)))
-                rel = (target - float(yaw[0]) + np.pi) % (2 * np.pi) - np.pi
-                target = float(yaw[0]) + float(np.clip(rel, -limit, limit))
-                obs = task.obs(qpos, qvel, np.array([target]))
-                d.ctrl[:] = task.ctrl(self.policy.act(obs))[0]
-        else:
-            d.ctrl[:] = self.manual_ctrl
-        mujoco.mj_step(m, d, task.cfg.frame_skip)
-        fallen = d.qpos[2] < task.cfg.min_height_frac * task.z0 or not np.isfinite(d.qpos).all()
-        if fallen and self.policy is not None and self.auto_reset:
+        _, up = LocoTask.yaw_up(d.qpos[None])
+        fallen = (d.qpos[2] < task.cfg.min_height_frac * task.z0 or up[0, 2] < task.cfg.min_up
+                  or not np.isfinite(d.qpos).all())
+        if fallen:
             self.falls += 1
-            self.reset()
+            had_goal = bool(self.nav.goals)
+            if self.auto_reset:
+                self.reset()
+            if had_goal:
+                self.nav.state, self.nav.message = "fallen", "robot fell"
 
     def _sensors(self, now: float) -> None:
+        self.robot.serve_render_requests()  # camera / segmentation frames requested by AI pilots
         if self.lidar_cfg.enabled and now - self._t_lidar >= 1.0 / self.lidar_cfg.rate_hz:
             self._t_lidar = now
             origin, pts, _, hit = self.lidar.scan(self.model, self.data)
@@ -329,7 +460,8 @@ class SimSession:
         self._t_lidar = self._t_cam = 0.0
         next_t = time.perf_counter()
         while self._alive:
-            dt = self.task.dt if self.task else float(self.model.opt.timestep) * 4
+            c, m = self.controller, self.model
+            dt = max(1, int(round(c.control_dt / m.opt.timestep))) * float(m.opt.timestep)
             try:
                 with self.lock:
                     if self.running or self._step_once:
@@ -345,6 +477,14 @@ class SimSession:
                 time.sleep(delay)
             else:
                 next_t = time.perf_counter()  # running behind real time: don't accumulate debt
+        # GL contexts belong to this thread: free them here, not from the garbage collector elsewhere
+        self.robot.close()
+        if self._rig is not None:
+            try:
+                self._rig.close()
+            except Exception:  # noqa: BLE001
+                pass
+            self._rig = None
 
 
 def param_spec() -> list[dict]:

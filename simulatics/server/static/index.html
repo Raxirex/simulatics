@@ -31,7 +31,7 @@
     <span>t <b id="r-time">0.0</b> s</span>
     <span>height <b id="r-height">-</b> m</span>
     <span>speed <b id="r-speed">-</b> m/s</span>
-    <span>policy <b id="r-policy">none</b></span>
+    <span>control <b id="r-ctrl">-</b></span>
     <span id="r-conn" class="bad">offline</span>
   </div>
 </header>
@@ -41,14 +41,21 @@
       <button data-tab="model" class="active">Model</button>
       <button data-tab="motors">Motors</button>
       <button data-tab="sensors">Sensors</button>
-      <button data-tab="plan">Plan</button>
+      <button data-tab="plan">Walk</button>
+      <button data-tab="arms">Arms</button>
+      <button data-tab="pilot">AI Pilot</button>
+      <button data-tab="design">Design</button>
       <button data-tab="train">Train</button>
     </nav>
 
+    <!-- ============================================================ MODEL -->
     <section id="tab-model" class="tab active">
       <p class="hint">Every slider rebuilds the robot (MJCF is regenerated and recompiled). The simulation resets.</p>
       <div id="model-info" class="info"></div>
-      <label class="check"><input type="checkbox" id="p-arms" checked> Arms</label>
+      <div class="row">
+        <label class="check"><input type="checkbox" id="p-arms" checked> Arms</label>
+        <label class="check"><input type="checkbox" id="p-hands" checked> Hands (wrist + gripper)</label>
+      </div>
       <div id="param-groups"></div>
       <div class="row">
         <button id="defaults">Reset to defaults</button>
@@ -60,13 +67,15 @@
       <div class="row"><button id="model-load">Load file</button><button id="model-builtin">Back to built-in</button></div>
     </section>
 
+    <!-- ============================================================ MOTORS -->
     <section id="tab-motors" class="tab">
-      <p class="hint">Live edits to the compiled model: no reset. Rebuilding the robot in the Model tab overwrites them. <b>Target</b> is the commanded joint angle when no policy is driving.</p>
+      <p class="hint">Live edits to the compiled model: no reset. Rebuilding the robot in the Model tab overwrites them. <b>Target</b> is the commanded joint angle while the Manual controller is active.</p>
       <div class="tablewrap"><table id="motors"><thead><tr>
         <th>Motor</th><th title="Stiffness, Nm/rad">kp</th><th title="Damping, Nms/rad">kv</th><th title="Torque limit, Nm">max&nbsp;Nm</th><th title="Passive joint damping">damp</th><th title="Rotor inertia">arm.</th><th>Target</th>
       </tr></thead><tbody></tbody></table></div>
     </section>
 
+    <!-- ============================================================ SENSORS -->
     <section id="tab-sensors" class="tab">
       <h3>Lidar</h3>
       <label class="check"><input type="checkbox" id="l-enabled" checked> Enabled</label>
@@ -90,45 +99,162 @@
       <div class="info" id="s-body"></div>
     </section>
 
+    <!-- ============================================================ WALK -->
     <section id="tab-plan" class="tab">
-      <p class="hint"><b>Double-click the floor</b> to set a goal. Shift + double-click queues another one. The robot needs a walking policy (Train tab) to follow the path.</p>
-      <h3>Obstacles</h3>
+      <p class="hint"><b>Double-click the floor</b> to send the robot there. <b>Ctrl + drag</b> on the floor sets the goal and the direction to face. Add <b>Shift</b> to queue more goals.</p>
+      <label>Walking controller
+        <select id="ctrl-kind">
+          <option value="auto">Automatic (best available)</option>
+          <option value="walker">Model-based walker (footsteps + balance)</option>
+          <option value="rl">Learned policy (PPO / distilled)</option>
+          <option value="es-policy">Evolved policy (ES / GA)</option>
+          <option value="manual">Manual joint targets</option>
+        </select>
+      </label>
+      <div class="info" id="n-status"></div>
+      <div class="row"><button id="n-clear">Stop and clear goals</button></div>
+      <h3>World</h3>
       <div class="row">
-        <label>Count <input type="number" id="o-n" value="14" min="1" max="60"></label>
-        <button id="o-random">Randomise</button><button id="o-clear">Clear</button>
+        <label>Objects <input type="number" id="o-n" value="14" min="1" max="60"></label>
+        <button id="o-random">Random obstacles</button><button id="o-clear">Clear</button>
       </div>
-      <h3>Map and path</h3>
-      <label>Plan on
+      <h3>Map</h3>
+      <label>Plan paths on
         <select id="n-source">
           <option value="truth">Ground-truth map</option>
           <option value="lidar">Lidar-built map (what the robot has seen)</option>
         </select>
       </label>
       <label class="check"><input type="checkbox" id="n-showmap" checked> Show lidar map on the floor</label>
-      <div class="row"><button id="n-clear">Clear goals</button><button id="n-resetmap">Forget lidar map</button></div>
-      <h3>Action planner</h3>
-      <div class="info" id="n-status"></div>
-      <label>Manual heading (deg), used when there is no goal
+      <label class="check"><input type="checkbox" id="n-showsteps" checked> Show planned footsteps</label>
+      <div class="row"><button id="n-resetmap">Forget lidar map</button></div>
+      <label>Heading for evolved policies (deg), used when there is no goal
         <input type="range" id="n-heading" min="-180" max="180" value="0" step="5"><output id="n-heading-o">0</output>
       </label>
     </section>
 
-    <section id="tab-train" class="tab">
-      <p class="hint">Evolves a walking controller in parallel on all CPU threads. Training uses the robot from the Model tab.</p>
+    <!-- ============================================================ ARMS -->
+    <section id="tab-arms" class="tab">
+      <p class="hint">Arm skills use inverse kinematics on the hand sites. They need Arms and Hands enabled in the Model tab.</p>
+      <div class="row"><button id="a-scene" class="primary">Table with objects</button><button id="a-clear">Clear world</button></div>
+      <div class="row">
+        <label>Arm <select id="a-side"><option value="auto">Auto (hand on the target's side)</option><option value="right">Right</option><option value="left">Left</option><option value="both">Both (gestures)</option></select></label>
+      </div>
+      <div class="row">
+        <button data-skill="home">Home</button><button data-skill="raise">Raise</button><button data-skill="wave">Wave</button>
+        <button data-skill="grasp">Grasp</button><button data-skill="release">Release</button>
+      </div>
+      <h3>Reach</h3>
+      <div class="grid3">
+        <label>x <input type="number" id="a-x" value="0.45" step="0.05"></label>
+        <label>y <input type="number" id="a-y" value="-0.2" step="0.05"></label>
+        <label>z <input type="number" id="a-z" value="1.0" step="0.05"></label>
+      </div>
+      <div class="row"><button id="a-reach">Reach point</button><button id="a-point">Point at</button></div>
+      <label>Reach an object <select id="a-object"></select></label>
+      <div class="row"><button id="a-reach-obj">Reach object</button></div>
+      <div class="info" id="a-status"></div>
+    </section>
+
+    <!-- ============================================================ PILOT -->
+    <section id="tab-pilot" class="tab">
+      <p class="hint">An AI model pilots the robot through tools: it sees the head camera, lidar and the named objects, walks with the planner and uses the arms. Missions run until the model calls <i>finish</i> or a limit is hit.</p>
+      <label>Pilot
+        <select id="pi-provider">
+          <option value="claude">Claude (Anthropic API)</option>
+          <option value="scripted">Offline scripted pilot (no API, simple commands)</option>
+        </select>
+      </label>
+      <div id="pi-claude">
+        <label>API key <input type="password" id="pi-key" autocomplete="off" placeholder="uses ANTHROPIC_API_KEY or ant login if empty"></label>
+        <p class="hint">The key stays in this server's memory only and is sent only to Anthropic.</p>
+        <div class="grid2">
+          <label>Model <select id="pi-model">
+            <option value="claude-opus-5-5">Claude Opus 5.5</option>
+            <option value="claude-sonnet-5-5">Claude Sonnet 5.5</option>
+            <option value="claude-haiku-5-5">Claude Haiku 5.5</option>
+            <option value="claude-fable-5-2">Claude Fable 5.2</option>
+          </select></label>
+          <label>Effort <select id="pi-effort">
+            <option value="low">low</option><option value="medium" selected>medium</option><option value="high">high</option><option value="xhigh">xhigh</option><option value="max">max</option>
+          </select></label>
+          <label>Max turns <input type="number" id="pi-turns" value="40" min="1" max="500"></label>
+          <label>Max cost (USD) <input type="number" id="pi-cost" value="2" min="0.01" step="0.5"></label>
+        </div>
+        <label class="check"><input type="checkbox" id="pi-images" checked> Send camera images</label>
+        <label class="check"><input type="checkbox" id="pi-fallbacks" checked> Refusal fallback to another model</label>
+      </div>
+      <label>Mission
+        <textarea id="pi-mission" rows="3">Look around, describe what you see, then walk to the nearest red object and wave.</textarea>
+      </label>
+      <div class="row"><button id="pi-start" class="primary">Start mission</button><button id="pi-stop">Stop</button></div>
+      <div class="info" id="pi-status">idle</div>
+      <div id="pi-log"></div>
+    </section>
+
+    <!-- ============================================================ DESIGN -->
+    <section id="tab-design" class="tab">
+      <h3>CAD parts</h3>
+      <p class="hint">Builds solid link geometry (hollow tubes, joint bosses) from the current robot, computes real masses and inertias, and can drive the simulation with them.</p>
       <div class="grid2">
-        <label>Algorithm <select id="t-algo"><option value="es">Evolution strategy</option><option value="ga">Genetic algorithm</option></select></label>
+        <label>Wall thickness (mm) <input type="number" id="d-wall" value="3" min="0.5" max="30" step="0.5"></label>
+        <label>Material density (kg/m3) <input type="number" id="d-density" value="1250" min="100" max="9000" step="50"></label>
+      </div>
+      <div class="row"><button id="d-cad" class="primary">Build CAD parts</button><button id="d-cad-use">Simulate with CAD masses</button></div>
+      <div class="info" id="d-cad-info"></div>
+      <div class="row">
+        <a class="button" id="d-dl-stl" href="/api/design/export?fmt=stl">Download STL (zip)</a>
+        <a class="button" href="/api/design/export?fmt=urdf">Download URDF</a>
+      </div>
+      <h3>Topology optimisation</h3>
+      <p class="hint">Removes material from a link where it carries no load. Loads come from simulating the robot walking (SIMP, C++ solver).</p>
+      <div class="grid2">
+        <label>Link <select id="tp-link"><option>thigh</option><option>shin</option><option>upper_arm</option><option>forearm</option></select></label>
+        <label>Resolution (cells along length) <input type="number" id="tp-nel" value="40" min="12" max="120"></label>
+        <label>Material to keep (fraction) <input type="number" id="tp-vol" value="0.3" min="0.05" max="0.9" step="0.05"></label>
+        <label>Iterations <input type="number" id="tp-iters" value="40" min="5" max="300"></label>
+      </div>
+      <div class="row"><button id="tp-start" class="primary">Optimise link</button><button id="tp-stop">Stop</button><button id="tp-apply">Use optimised link</button></div>
+      <div class="info" id="tp-info"></div>
+      <canvas id="topo-view" width="600" height="300"></canvas>
+      <h3>AI design optimisation</h3>
+      <p class="hint">Searches body proportions and motor gains. Each candidate robot is simulated walking to goals; the score rewards accuracy and efficiency.</p>
+      <div class="grid2">
+        <label>Algorithm <select id="o-algo"><option value="cmaes">CMA-ES (evolution)</option><option value="bo">Bayesian optimisation</option></select></label>
+        <label>Generations <input type="number" id="o-gens" value="10" min="1" max="500"></label>
+        <label>Population <input type="number" id="o-pop" value="8" min="2" max="64"></label>
+        <label>Parallel workers <input type="number" id="o-workers" value="4" min="1" max="16"></label>
+      </div>
+      <div id="o-genes" class="genes"></div>
+      <div class="row"><button id="o-start" class="primary">Optimise design</button><button id="o-stop">Stop</button><button id="o-apply">Apply best design</button></div>
+      <div class="info" id="o-info"></div>
+      <canvas id="o-chart" width="600" height="220"></canvas>
+    </section>
+
+    <!-- ============================================================ TRAIN -->
+    <section id="tab-train" class="tab">
+      <p class="hint">Trains walking controllers on all CPU threads with the robot from the Model tab.</p>
+      <label>Method
+        <select id="t-algo">
+          <option value="ppo">PPO velocity tracking (RL)</option>
+          <option value="distill">Distil the model-based walker into a network</option>
+          <option value="es">Evolution strategy</option>
+          <option value="ga">Genetic algorithm</option>
+        </select>
+      </label>
+      <div class="grid2">
         <label>Run name <input type="text" id="t-name" value="run"></label>
-        <label>Population <input type="number" id="t-population" min="8" max="4096" step="8"></label>
-        <label>Generations <input type="number" id="t-generations" min="1" max="100000"></label>
+        <label><span id="t-pop-label">Population</span> <input type="number" id="t-population" min="8" max="4096" step="8"></label>
+        <label><span id="t-gen-label">Generations</span> <input type="number" id="t-generations" min="1" max="100000"></label>
         <label>Episode (s) <input type="number" id="t-episode_seconds" min="1" max="60" step="1"></label>
         <label>Threads (0 = all) <input type="number" id="t-threads" min="0" max="256"></label>
-        <label>Mutation sigma <input type="number" id="t-sigma" step="0.005" min="0.001"></label>
-        <label>Learning rate <input type="number" id="t-lr" step="0.001" min="0.0001"></label>
-        <label>Heading range (rad) <input type="number" id="t-heading_range" step="0.1" min="0" max="3.14"></label>
+        <label class="es-only">Mutation sigma <input type="number" id="t-sigma" step="0.005" min="0.001"></label>
+        <label>Learning rate <input type="number" id="t-lr" step="0.0001" min="0.00001"></label>
+        <label class="es-only">Heading range (rad) <input type="number" id="t-heading_range" step="0.1" min="0" max="3.14"></label>
       </div>
-      <label class="check"><input type="checkbox" id="t-evolve_body"> Evolve the body too (limb lengths, motor gains)</label>
+      <label class="check es-only"><input type="checkbox" id="t-evolve_body"> Evolve the body too (limb lengths, motor gains)</label>
       <label class="check"><input type="checkbox" id="t-continue"> Continue from the loaded policy</label>
-      <div class="row"><button id="t-start" class="primary">Start training</button><button id="t-stop">Stop</button></div>
+      <div class="row"><button id="t-start-train" class="primary">Start training</button><button id="t-stop-train">Stop</button></div>
       <div class="info" id="t-status">idle</div>
       <canvas id="chart" width="600" height="260"></canvas>
       <div class="legend"><span class="k1">best</span><span class="k2">current policy</span><span class="k3">population mean</span></div>
@@ -140,6 +266,7 @@
   </aside>
   <div id="view">
     <canvas id="gl"></canvas>
+    <div id="hud"></div>
     <div id="toast" hidden></div>
   </div>
 </main>

@@ -4,18 +4,25 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "simulatics"
-version = "0.1.0"
-description = "Humanoid robot simulation workbench: MuJoCo physics, sensors, planning, parallel evolutionary training"
+version = "0.2.0"
+description = "Humanoid robot workbench: MuJoCo physics, model-based walking, arms and hands, sensors, planning, CAD and topology optimisation, AI design search, PPO and evolution training, Claude-piloted missions"
 requires-python = ">=3.10"
 dependencies = [
     "mujoco>=3.3",
     "numpy>=1.26",
+    "scipy>=1.11",          # ZMP preview gains (Riccati), Bayesian optimisation, sparse FEA fallback
     "fastapi>=0.110",
     "uvicorn[standard]>=0.29",
     "pillow>=10",
+    "manifold3d>=3.0",      # CSG for CAD parts
+    "trimesh>=4.0",         # meshes, mass properties, export
+    "scikit-image>=0.22",   # marching cubes for topology-optimised parts
+    "threadpoolctl>=3.1",   # BLAS thread limits during PPO
+    "anthropic>=2.0",       # Claude pilot (only imported when a Claude mission runs)
 ]
 
 [project.optional-dependencies]
+step = ["build123d>=0.9"]   # STEP export of CAD parts (OpenCASCADE, ~300 MB)
 dev = ["pytest"]
 
 [project.scripts]

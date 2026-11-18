@@ -49,7 +49,19 @@ class LocoTask:
         self.nq, self.nv, self.nu, self.na = model.nq, model.nv, model.nu, model.na
         self.nstate = mujoco.mj_stateSize(model, STATE_SPEC)
         self.dt = float(model.opt.timestep) * self.cfg.frame_skip
-        self.obs_dim = 1 + 3 + 3 + 3 + (self.nq - 7) + (self.nv - 6) + 2
+        # Only the robot's own joints are observed: free bodies in the world (graspable props)
+        # also add qpos/qvel entries, and must not change the policy's input.
+        root = model.body_rootid[model.jnt_bodyid[0]]
+        q_idx, v_idx = [], []
+        for j in range(1, model.njnt):
+            if model.body_rootid[model.jnt_bodyid[j]] != root:
+                continue
+            nq_j = {int(mujoco.mjtJoint.mjJNT_FREE): 7, int(mujoco.mjtJoint.mjJNT_BALL): 4}.get(int(model.jnt_type[j]), 1)
+            nv_j = {int(mujoco.mjtJoint.mjJNT_FREE): 6, int(mujoco.mjtJoint.mjJNT_BALL): 3}.get(int(model.jnt_type[j]), 1)
+            q_idx += range(model.jnt_qposadr[j], model.jnt_qposadr[j] + nq_j)
+            v_idx += range(model.jnt_dofadr[j], model.jnt_dofadr[j] + nv_j)
+        self.q_idx, self.v_idx = np.array(q_idx, int), np.array(v_idx, int)
+        self.obs_dim = 1 + 3 + 3 + 3 + len(self.q_idx) + len(self.v_idx) + 2
         self.act_dim = self.nu
 
         # nominal pose: first keyframe if the model has one, else defaults
@@ -105,8 +117,8 @@ class LocoTask:
             up,
             np.stack([v_fwd, v_lat, qvel[:, 2]], axis=1),
             qvel[:, 3:6],
-            qpos[:, 7:],
-            qvel[:, 6:] * 0.1,
+            qpos[:, self.q_idx],
+            qvel[:, self.v_idx] * 0.1,
             np.stack([np.cos(rel), np.sin(rel)], axis=1),
         ], axis=1)
 

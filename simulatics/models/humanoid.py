@@ -9,6 +9,7 @@ Conventions: Z up, robot faces +X, angles in degrees, SI units.
 """
 from __future__ import annotations
 
+import math
 from dataclasses import dataclass, asdict, fields
 
 # name -> (min, max, default, label, group)
@@ -86,6 +87,8 @@ class HumanoidParams:
     timestep: float = 0.005
     friction: float = 1.0
     arms: bool = True
+    # wrist (pitch + roll) and a two-finger parallel gripper on each forearm; needs arms
+    hands: bool = True
 
     def to_dict(self) -> dict:
         return asdict(self)
@@ -93,13 +96,18 @@ class HumanoidParams:
     @classmethod
     def from_dict(cls, d: dict) -> "HumanoidParams":
         names = {f.name for f in fields(cls)}
-        p = cls(**{k: v for k, v in d.items() if k in names})
-        return p.clipped()
+        kw = {k: v for k, v in d.items() if k in names}
+        if "arms" in kw and "hands" not in kw:
+            # a full parameter dict saved before hands existed (e.g. a trained policy's
+            # meta) describes a hand-less robot: keep its actuator count unchanged
+            kw["hands"] = False
+        return cls(**kw).clipped()
 
     def clipped(self) -> "HumanoidParams":
         for k, (lo, hi, *_rest) in PARAM_SPEC.items():
             setattr(self, k, float(min(hi, max(lo, float(getattr(self, k))))))
         self.arms = bool(self.arms)
+        self.hands = bool(self.hands)
         return self
 
     # ---- derived geometry -------------------------------------------------
@@ -153,9 +161,56 @@ def _leg(p: HumanoidParams, side: str, sign: float) -> str:
         </body>"""
 
 
+# ---- hands ------------------------------------------------------------------
+# A wrist (pitch "wrist_y", then roll "wrist_x") and a parallel two-finger gripper.
+# Sizes are fixed (sized for 4-6 cm objects) and the hand is light (~0.2 kg) so it
+# does not change how the robot balances. In the hanging pose the fingers point
+# down (hand -z) and close along the hand's y axis.
+HAND_PALM = 0.05          # wrist axis -> finger base (m)
+HAND_FINGER = 0.05        # finger length (m)
+HAND_GRASP = 0.035        # finger base -> grasp point (site "<side>_hand"), 1.5 cm above the tips
+GRIPPER_OPEN = 0.045      # finger travel (m); the pads' inner faces are 2 * (0.002 + q) apart
+WRIST_Y_RANGE = (-120, 120)
+WRIST_X_RANGE = (-60, 60)
+# Grasp contacts (finger pads and props): near-hard impedance and the stiffest time
+# constant MuJoCo allows at dt = 5 ms. MuJoCo's soft contacts let a pinched object
+# creep under load at a rate ~ (1 - d) / d / b; with the default solimp/solref a 70 g
+# cube slid 9.5 mm in 3 s, with these 0.9 mm (measured, tests/test_arms.py).
+GRASP_CONTACT = 'solimp="0.99 0.999 0.001" solref="0.01 1"'
+
+
+def _hand(p: HumanoidParams, side: str) -> str:
+    """Wrist + gripper, attached at the end of the forearm.
+
+    One actuator drives the finger "<side>_gripper" (q = opening of one finger, 0 =
+    closed); the mirror finger is slaved to it with a joint equality, as in the
+    Franka Panda hand of MuJoCo Menagerie. Finger pads use condim 4 (sliding +
+    torsional friction) so a pinched object does not spin out of the grip.
+    """
+    pad = (f'type="box" size="0.012 0.005 {_f(HAND_FINGER / 2)}" mass="0.025" condim="4" '
+           f'friction="1.5 0.02 0.0001" {GRASP_CONTACT} rgba="0.15 0.16 0.18 1"')
+    return f"""
+            <body name="{side}_hand" pos="0 0 {_f(-p.forearm_length)}">
+              <joint name="{side}_wrist_y" axis="0 1 0" range="{_f(*WRIST_Y_RANGE)}"/>
+              <joint name="{side}_wrist_x" axis="1 0 0" range="{_f(*WRIST_X_RANGE)}"/>
+              <geom name="{side}_palm" type="box" pos="0 0 {_f(-HAND_PALM / 2)}" size="0.018 0.045 {_f(HAND_PALM / 2)}"
+                    mass="0.15" rgba="0.35 0.37 0.42 1"/>
+              <site name="{side}_hand" pos="0 0 {_f(-HAND_PALM - HAND_GRASP)}" size="0.01" rgba="1 0.3 0.2 0"/>
+              <body name="{side}_finger1" pos="0 0 {_f(-HAND_PALM)}">
+                <joint name="{side}_gripper" type="slide" axis="0 1 0" range="0 {_f(GRIPPER_OPEN)}"/>
+                <geom name="{side}_finger1" pos="0 0.007 {_f(-HAND_FINGER / 2)}" {pad}/>
+              </body>
+              <body name="{side}_finger2" pos="0 0 {_f(-HAND_PALM)}">
+                <joint name="{side}_gripper_mirror" type="slide" axis="0 -1 0" range="0 {_f(GRIPPER_OPEN)}"/>
+                <geom name="{side}_finger2" pos="0 -0.007 {_f(-HAND_FINGER / 2)}" {pad}/>
+              </body>
+            </body>"""
+
+
 def _arm(p: HumanoidParams, side: str, sign: float) -> str:
     r = p.arm_radius
     roll = (-10, 100) if sign > 0 else (-100, 10)
+    hand = _hand(p, side) if p.hands else ""
     return f"""
         <body name="{side}_upper_arm" pos="{_f(0, sign * p.shoulder_width / 2, p.torso_length / 2 - 0.02)}">
           <joint name="{side}_shoulder_y" axis="0 1 0" range="-120 60"/>
@@ -163,28 +218,73 @@ def _arm(p: HumanoidParams, side: str, sign: float) -> str:
           <geom name="{side}_upper_arm" type="capsule" fromto="0 0 0 0 0 {_f(-p.upper_arm_length)}" size="{_f(r)}"/>
           <body name="{side}_forearm" pos="0 0 {_f(-p.upper_arm_length)}">
             <joint name="{side}_elbow" axis="0 1 0" range="-130 0"/>
-            <geom name="{side}_forearm" type="capsule" fromto="0 0 0 0 0 {_f(-p.forearm_length)}" size="{_f(r * 0.85)}"/>
+            <geom name="{side}_forearm" type="capsule" fromto="0 0 0 0 0 {_f(-p.forearm_length)}" size="{_f(r * 0.85)}"/>{hand}
           </body>
         </body>"""
 
 
+def _props_xml(props: list[dict]) -> tuple[str, str]:
+    """Free-floating objects the hands can pick up -> (bodies XML, <custom> name table).
+
+    Bodies and geoms are named prop_<i>; the human-readable name ("red cube") is
+    stored as custom text "prop_<i>" so controllers can report it from the model alone.
+    """
+    bodies, names = "", ""
+    for i, o in enumerate(props):
+        shape = o.get("shape", "box")
+        size = o.get("size", 0.025)
+        size = [float(size)] if isinstance(size, (int, float)) else [float(s) for s in size]
+        if shape == "sphere":
+            gsize = _f(size[0])
+        elif shape == "cylinder":
+            gsize = _f(size[0], size[1] if len(size) > 1 else size[0])
+        else:
+            shape = "box"
+            gsize = _f(*(size * 3 if len(size) == 1 else size[:3]))
+        x, y, z = (float(v) for v in o["pos"])
+        rgba = _f(*o.get("rgba", (0.86, 0.22, 0.20, 1.0)))
+        yaw = float(o.get("yaw", 0.0)) * 57.29578
+        bodies += (f'    <body name="prop_{i}" pos="{_f(x, y, z)}" euler="0 0 {_f(yaw)}">\n'
+                   f'      <freejoint name="prop_{i}"/>\n'
+                   f'      <geom name="prop_{i}" type="{shape}" size="{gsize}" mass="{_f(float(o.get("mass", 0.08)))}" '
+                   f'rgba="{rgba}" group="1" contype="1" conaffinity="1" condim="4" friction="1 0.02 0.0001" '
+                   f'{GRASP_CONTACT}/>\n'
+                   f'    </body>\n')
+        label = str(o.get("name", f"prop {i}")).replace("&", "and").replace('"', "'").replace("<", "").replace(">", "")
+        names += f'    <text name="prop_{i}" data="{label}"/>\n'
+    return bodies, (f"  <custom>\n{names}  </custom>\n" if names else "")
+
+
 def _servo(joint: str, kp: float, torque: float, kv_ratio: float, lo: float, hi: float) -> str:
-    # ctrl is the target joint angle (degrees in XML -> radians in the model)
+    # ctrl is the target joint angle in radians. lo/hi are given in degrees like the joint
+    # ranges, but MuJoCo does NOT convert actuator ctrlrange under compiler angle="degree",
+    # so convert here (otherwise the range is e.g. 0..140 rad and never clamps anything).
     return (f'    <position name="{joint}" joint="{joint}" kp="{_f(kp)}" kv="{_f(kp * kv_ratio)}" '
-            f'ctrlrange="{_f(lo, hi)}" forcerange="{_f(-torque, torque)}"/>\n')
+            f'ctrlrange="{_f(math.radians(lo), math.radians(hi))}" forcerange="{_f(-torque, torque)}"/>\n')
 
 
-def build_mjcf(p: HumanoidParams, obstacles: list[dict] | None = None) -> str:
+def build_mjcf(p: HumanoidParams, obstacles: list[dict] | None = None, props: list[dict] | None = None) -> str:
     """Return a complete MJCF document for the humanoid standing at the origin.
 
     obstacles: list of {"pos": [x, y], "size": [hx, hy, hz], "yaw": rad} objects
     standing on the floor (used for lidar / planning / LLM scenes). Optional keys:
     "shape" ("box" default, or "cylinder": radius hx, half-height hz),
     "rgba" [r, g, b, a] and "name" (e.g. "red box"; the geom is named obj_<i>).
+    A box obstacle about 0.9 m tall works as a table (see sim/props.py).
+
+    props: list of free bodies the hands can pick up: {"name": "red cube",
+    "shape": "box"|"sphere"|"cylinder", "size": MuJoCo half-sizes (box [hx, hy, hz],
+    sphere [r], cylinder [r, half-height]; a number means a cube / ball),
+    "pos": [x, y, z] centre, "rgba", "mass" kg, optional "yaw" rad}. Body and geom
+    are named prop_<i> (group 1, colliding with hands, tables, floor and each other).
+    They come after the robot in the tree, so the robot's qpos/qvel indices do not
+    change, and each hand gets an inactive weld per prop ("<side>_hold_<i>") that
+    ArmController can switch on as an optional grasp assist.
     """
     p = HumanoidParams.from_dict(p.to_dict())  # clipped copy
     tl, tr = p.torso_length, p.torso_radius
     sw = p.shoulder_width
+    hands = p.arms and p.hands
 
     legs = _leg(p, "left", 1.0) + _leg(p, "right", -1.0)
     arms = (_arm(p, "left", 1.0) + _arm(p, "right", -1.0)) if p.arms else ""
@@ -206,6 +306,23 @@ def build_mjcf(p: HumanoidParams, obstacles: list[dict] | None = None) -> str:
             act += _servo(f"{side}_shoulder_y", p.arm_kp, p.arm_torque, p.kv_ratio, -120, 60)
             act += _servo(f"{side}_shoulder_x", p.arm_kp, p.arm_torque, p.kv_ratio, *roll)
             act += _servo(f"{side}_elbow", p.arm_kp, p.arm_torque, p.kv_ratio, -130, 0)
+    # hand actuators come after the 20 body/arm ones so existing actuator indices stay valid
+    equality = ""
+    if hands:
+        for side in ("left", "right"):
+            act += _servo(f"{side}_wrist_y", p.arm_kp * 0.5, p.arm_torque * 0.5, p.kv_ratio, *WRIST_Y_RANGE)
+            act += _servo(f"{side}_wrist_x", p.arm_kp * 0.5, p.arm_torque * 0.5, p.kv_ratio, *WRIST_X_RANGE)
+            # ctrl = finger opening in metres (0 closed); 400 N/m saturating at 10 N squeezes a
+            # 4-6 cm object with 7-10 N
+            act += (f'    <position name="{side}_gripper" joint="{side}_gripper" kp="400" kv="{_f(400 * p.kv_ratio)}" '
+                    f'ctrlrange="0 {_f(GRIPPER_OPEN)}" forcerange="-10 10"/>\n')
+            equality += (f'    <joint name="{side}_gripper_mirror" joint1="{side}_gripper_mirror" joint2="{side}_gripper" '
+                         f'polycoef="0 1 0 0 0" solref="0.01 1"/>\n')
+        for i in range(len(props or [])):
+            for side in ("left", "right"):
+                equality += f'    <weld name="{side}_hold_{i}" body1="{side}_hand" body2="prop_{i}" active="false"/>\n'
+    equality = f"  <equality>\n{equality}  </equality>\n" if equality else ""
+    props_xml, custom = _props_xml(props or [])
 
     obs_xml = ""
     for i, o in enumerate(obstacles or []):
@@ -238,7 +355,7 @@ def build_mjcf(p: HumanoidParams, obstacles: list[dict] | None = None) -> str:
     <texture name="grid" type="2d" builtin="checker" rgb1="0.22 0.24 0.27" rgb2="0.27 0.29 0.33" width="256" height="256"/>
     <material name="grid" texture="grid" texrepeat="40 40" reflectance="0.05"/>
   </asset>
-  <worldbody>
+{custom}  <worldbody>
     <light pos="0 0 4" dir="0 0 -1" directional="true"/>
     <geom name="floor" type="plane" size="40 40 0.1" material="grid" group="2" contype="1" conaffinity="1"
           friction="{_f(p.friction, 0.02, 0.001)}" density="0"/>
@@ -250,6 +367,8 @@ def build_mjcf(p: HumanoidParams, obstacles: list[dict] | None = None) -> str:
       <site name="imu" pos="0 0 0" size="0.02" rgba="1 0 0 0"/>
       <site name="lidar" pos="0 0 {_f(head_z + p.head_radius + 0.03)}" size="0.03" rgba="0.2 0.9 0.4 1"/>
       <camera name="head_cam" pos="{_f(p.head_radius + 0.01, 0, head_z)}" xyaxes="0 -1 0 0.25 0 1" fovy="75"/>
+      <!-- looks 55 deg down at the hands' workspace (tables, objects in reach) -->
+      <camera name="work_cam" pos="{_f(p.head_radius + 0.01, 0, head_z - 0.02)}" xyaxes="0 -1 0 0.819 0 0.574" fovy="80"/>
       <camera name="chase" pos="-2.6 0 0.9" xyaxes="0 -1 0 0.3 0 1" mode="trackcom" fovy="55"/>
       <body name="pelvis" pos="0 0 {_f(-p.waist_offset)}">
         <joint name="abdomen_y" axis="0 1 0" range="-30 45"/>
@@ -257,8 +376,8 @@ def build_mjcf(p: HumanoidParams, obstacles: list[dict] | None = None) -> str:
         <geom name="pelvis" type="capsule" fromto="0 {_f(-p.pelvis_width / 2)} {_f(-p.pelvis_drop)} 0 {_f(p.pelvis_width / 2)} {_f(-p.pelvis_drop)}" size="{_f(max(p.leg_radius * 1.3, 0.05))}"/>{legs}
       </body>{arms}
     </body>
-  </worldbody>
-  <actuator>
+{props_xml}  </worldbody>
+{equality}  <actuator>
 {act}  </actuator>
   <sensor>
     <gyro name="gyro" site="imu"/>

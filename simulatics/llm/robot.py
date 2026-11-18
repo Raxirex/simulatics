@@ -51,5 +51,28 @@ class RobotInterface(Protocol):
         """Stop walking and stand still."""
 
     def wait(self, seconds: float) -> None:
-        """Block until `seconds` of simulation time pass, or the current walk ends (whichever is first).
-        Must return promptly if the simulation is paused or the pilot is cancelled."""
+        """Block until `seconds` of simulation time pass, or the current walk / arm motion ends
+        (whichever is first). Must return promptly if the simulation is paused or the pilot is cancelled."""
+
+    # ---- arms and hands ------------------------------------------------
+    def reach(self, side: str, x: float, y: float, z: float, approach: list[float] | None = None) -> str:
+        """Move the "left" or "right" hand's grasp point (between the finger pads) to a world point.
+        approach: optional unit direction of the final motion, e.g. [0, 0, -1] = come down from above
+        (opens the gripper first; use it to pick objects off a table). Returns a short message."""
+
+    def grasp(self, side: str) -> str:
+        """Close that hand's gripper on whatever is between the fingers."""
+
+    def release(self, side: str) -> str:
+        """Open that hand's gripper."""
+
+    def point_at(self, side: str, x: float, y: float, z: float) -> str:
+        """Point that arm at a world point."""
+
+    def arm_gesture(self, side: str, gesture: str) -> str:
+        """Named motion: "home" (arms down), "wave", "raise"."""
+
+    def arm_status(self) -> dict:
+        """{"left": {"skill", "state": "idle"|"moving"|"holding"|"done"|"failed",
+                     "hand_xyz": [x, y, z], "error_m": float | None, "holding": object name | None},
+            "right": {...}}"""

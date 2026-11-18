@@ -41,3 +41,12 @@ def random_objects(n: int = 12, seed: int | None = None, extent: float = 9.0, sp
         if counts[base] > 1 and o["name"] == base:
             o["name"] = f"{base} 1"
     return objs
+
+
+def manipulation_scene(seed: int | None = None, params=None, n_props: int | None = None) -> tuple[list[dict], list[dict]]:
+    """A table in front of the robot with 2-4 graspable cubes / balls -> (obstacles, props).
+
+    See sim/props.py (imported lazily: props.py uses this module's PALETTE).
+    """
+    from .props import manipulation_scene as _scene
+    return _scene(seed, params, n_props)

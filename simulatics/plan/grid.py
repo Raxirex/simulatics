@@ -91,29 +91,74 @@ class GridMap:
 
     # ---- planning ----------------------------------------------------------
     def plan(self, start_xy, goal_xy, robot_radius: float = 0.35, source: str = "truth") -> np.ndarray:
-        """Returns a world-frame path (n, 2), empty when the goal is unreachable."""
+        """Returns a world-frame path (n, 2), empty when the goal is unreachable.
+
+        Paths keep `robot_radius` of clearance. A goal closer to an obstacle than that (standing at a
+        table to pick something up) is still allowed if it keeps `APPROACH_CLEARANCE`: the path then
+        goes to the nearest well-clear cell and ends with a short straight final approach.
+        """
         occ = self.truth if source == "truth" else self.lidar_occ
         cost = native.inflate(occ, robot_radius / self.res)
         s, g = self.to_cell(start_xy), self.to_cell(goal_xy)
         # the robot may already be inside an inflated cell: free its own footprint
         r = 3
         cost[max(0, s[1] - r):s[1] + r + 1, max(0, s[0] - r):s[0] + r + 1] = 0
-        cells = native.astar(cost, (int(s[0]), int(s[1])), (int(g[0]), int(g[1])))
+        approach = None
+        if cost[g[1], g[0]] == 255:
+            tight = native.inflate(occ, self.APPROACH_CLEARANCE / self.res)
+            if tight[g[1], g[0]] == 255:
+                return np.zeros((0, 2))  # the goal itself is (nearly) inside an obstacle
+            approach = self._nearest_open_cell(cost, tight, g)
+            if approach is None:
+                return np.zeros((0, 2))
+        end = approach if approach is not None else g
+        cells = native.astar(cost, (int(s[0]), int(s[1])), (int(end[0]), int(end[1])))
         if len(cells) == 0:
             return np.zeros((0, 2))
         cells = native.smooth_path(cost, cells, limit=60)
         path = self.to_world(cells)
-        path[0], path[-1] = np.asarray(start_xy, float), np.asarray(goal_xy, float)
+        path[0] = np.asarray(start_xy, float)
+        if approach is None:
+            path[-1] = np.asarray(goal_xy, float)
+        else:
+            path = np.vstack([path, np.asarray(goal_xy, float)])
         return path
+
+    APPROACH_CLEARANCE = 0.17   # m between the robot's centre and an obstacle at a close-in goal
+
+    def _nearest_open_cell(self, cost: np.ndarray, tight: np.ndarray, g: np.ndarray, max_dist: float = 0.6):
+        """Closest planner-reachable cell to g whose straight line to g stays clear at APPROACH_CLEARANCE."""
+        n = int(max_dist / self.res)
+        y0, y1 = max(0, g[1] - n), min(self.n, g[1] + n + 1)
+        x0, x1 = max(0, g[0] - n), min(self.n, g[0] + n + 1)
+        ys, xs = np.nonzero(cost[y0:y1, x0:x1] < 255)
+        if len(xs) == 0:
+            return None
+        cand = np.stack([xs + x0, ys + y0], axis=1)
+        order = np.argsort(np.hypot(cand[:, 0] - g[0], cand[:, 1] - g[1]))
+        for c in cand[order[:200]]:
+            k = max(2, int(np.hypot(*(c - g))) + 1)
+            line = np.round(c + (g - c) * np.linspace(0, 1, k)[:, None]).astype(int)
+            if (tight[line[:, 1], line[:, 0]] < 255).all():
+                return c
+        return None
 
     def blocked(self, path: np.ndarray, robot_radius: float = 0.35, source: str = "truth") -> bool:
         if len(path) < 2:
             return False
         occ = self.truth if source == "truth" else self.lidar_occ
         cost = native.inflate(occ, robot_radius * 0.7 / self.res)
-        for a, b in zip(path[:-1], path[1:]):
+        tight = None
+        segs = list(zip(path[:-1], path[1:]))
+        for i, (a, b) in enumerate(segs):
             n = max(2, int(np.linalg.norm(b - a) / self.res))
             c = self.to_cell(a + (b - a) * np.linspace(0, 1, n)[:, None])
-            if (cost[c[1:, 1], c[1:, 0]] == 255).any():
+            grid = cost
+            if i == len(segs) - 1 and np.linalg.norm(b - a) <= 0.8:
+                # a short final approach may end close to an obstacle (see plan)
+                if tight is None:
+                    tight = native.inflate(occ, self.APPROACH_CLEARANCE / self.res)
+                grid = tight
+            if (grid[c[1:, 1], c[1:, 0]] == 255).any():
                 return True
         return False

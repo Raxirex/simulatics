@@ -25,7 +25,7 @@ def test_humanoid_compiles_at_parameter_extremes():
     for pick in (0, 1):
         p = HumanoidParams.from_dict({k: v[pick] for k, v in PARAM_SPEC.items()})
         m, d = model(p)
-        assert m.nu == 20 and m.nq == 27
+        assert m.nu == 26 and m.nq == 35  # 20 body/arm servos + wrist_y, wrist_x, gripper per hand
         feet = [d.geom(f"{s}_foot").xpos[2] for s in ("left", "right")]
         assert all(0.02 < z < 0.04 for z in feet)  # feet rest on the floor, not through it
 
@@ -113,6 +113,16 @@ def test_planner_goes_around_wall_and_reports_unreachable():
     assert len(grid.plan([0, 0], [3.0, 0.0])) == 0  # goal inside the obstacle
 
 
+def test_planner_allows_a_close_final_approach():
+    m, d = model(obstacles=OBST)          # wall face at x = 2.7
+    grid = GridMap()
+    grid.rasterize_truth(m, d)
+    path = grid.plan([0, 0], [2.48, 0.0])  # 0.22 m from the wall: inside the 0.35 m planning margin
+    assert len(path) >= 2 and np.allclose(path[-1], [2.48, 0.0])
+    assert not grid.blocked(path)          # the short final approach is not treated as a collision
+    assert len(grid.plan([0, 0], [2.6, 0.0])) == 0  # 0.1 m from the wall: too close to stand
+
+
 def test_lidar_sees_obstacle_and_builds_map():
     m, d = model(obstacles=OBST)
     lidar = Lidar(m, LidarConfig(h_samples=360, channels=4, v_min=-10, v_max=0))
@@ -133,13 +143,20 @@ def test_navigator_behaviour_tree():
     grid = GridMap()
     grid.rasterize_truth(m, d)
     nav = Navigator(grid)
-    assert nav.tick(np.zeros(2), 0.0) is None
-    nav.set_goal([6, 0])
-    yaw = nav.tick(np.zeros(2), 0.0)
-    assert yaw is not None and nav.active == "FollowPath" and abs(yaw) > 0.3  # steers around the wall
-    assert nav.tick(np.array([5.9, 0.0]), 0.0) is None and not nav.goals
+    nav.tick(np.zeros(2), 0.0, {"mode": "stand"})
+    assert nav.take_new_path() is None and nav.state == "idle"
+    nav.set_goal([6, 0], yaw=np.pi / 2)
+    nav.tick(np.zeros(2), 0.0, {"mode": "stand"})
+    path, yaw = nav.take_new_path()
+    assert nav.active == "Follow" and yaw == np.pi / 2
+    assert np.abs(path[:, 1]).max() > 2.0  # the planned path goes around the wall
+    nav.tick(np.array([1.0, 2.5]), 0.0, {"mode": "walk"})
+    assert nav.take_new_path() is None and nav.state == "walking"  # still following the same path
+    nav.tick(np.array([6.0, 0.0]), 0.0, {"mode": "done", "goal_error_m": 0.02})
+    assert not nav.goals and nav.state == "reached" and "0.020" in nav.message
     nav.set_goal([3.0, 0.0])
-    assert nav.tick(np.zeros(2), 0.0) is None and "no path" in nav.message
+    nav.tick(np.zeros(2), 0.0, {"mode": "stand"})
+    assert nav.state == "failed" and "no path" in nav.message
 
 
 def test_parallel_evaluator_matches_single_thread():
@@ -169,4 +186,4 @@ def test_trainer_runs_and_saves_loadable_policy(tmp_path, algo, body):
     task = LocoTask(m)
     s = LocoTask.initial_state(m)[None]
     act = pol.act(task.obs(*task.split(s), np.zeros(1)))
-    assert act.shape == (1, 20) and np.abs(act).max() <= 1
+    assert act.shape == (1, 26) and np.abs(act).max() <= 1

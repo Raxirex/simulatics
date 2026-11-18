@@ -7,4 +7,5 @@ simulatics/native/build/
 simulatics/native/bin/
 runs/*
 !runs/pretrained_walker/
+MUJOCO_LOG.TXT
 .claude/
