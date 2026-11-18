@@ -1,0 +1,148 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Simulatics</title>
+<link rel="stylesheet" href="/static/style.css">
+<script type="importmap">
+{ "imports": {
+  "three": "https://cdn.jsdelivr.net/npm/three@0.160.0/build/three.module.js",
+  "three/addons/": "https://cdn.jsdelivr.net/npm/three@0.160.0/examples/jsm/"
+} }
+</script>
+</head>
+<body>
+<header>
+  <div class="brand">Simulatics <span id="ver"></span></div>
+  <div class="transport">
+    <button id="play" class="primary">Play</button>
+    <button id="step" title="Advance one control step">Step</button>
+    <button id="reset">Reset</button>
+    <label>Speed
+      <select id="speed">
+        <option value="0.25">0.25x</option><option value="0.5">0.5x</option><option value="1" selected>1x</option>
+        <option value="2">2x</option><option value="4">4x</option>
+      </select>
+    </label>
+    <label class="check"><input type="checkbox" id="follow" checked> Follow robot</label>
+  </div>
+  <div class="readouts">
+    <span>t <b id="r-time">0.0</b> s</span>
+    <span>height <b id="r-height">-</b> m</span>
+    <span>speed <b id="r-speed">-</b> m/s</span>
+    <span>policy <b id="r-policy">none</b></span>
+    <span id="r-conn" class="bad">offline</span>
+  </div>
+</header>
+<main>
+  <aside>
+    <nav id="tabs">
+      <button data-tab="model" class="active">Model</button>
+      <button data-tab="motors">Motors</button>
+      <button data-tab="sensors">Sensors</button>
+      <button data-tab="plan">Plan</button>
+      <button data-tab="train">Train</button>
+    </nav>
+
+    <section id="tab-model" class="tab active">
+      <p class="hint">Every slider rebuilds the robot (MJCF is regenerated and recompiled). The simulation resets.</p>
+      <div id="model-info" class="info"></div>
+      <label class="check"><input type="checkbox" id="p-arms" checked> Arms</label>
+      <div id="param-groups"></div>
+      <div class="row">
+        <button id="defaults">Reset to defaults</button>
+        <a class="button" href="/api/model/export" download="humanoid.xml">Export MJCF</a>
+      </div>
+      <h3>Import a robot</h3>
+      <p class="hint">Path to an MJCF or URDF file on this computer, for example a Unitree G1 scene from MuJoCo Menagerie.</p>
+      <input type="text" id="model-path" placeholder="C:\path\to\scene.xml">
+      <div class="row"><button id="model-load">Load file</button><button id="model-builtin">Back to built-in</button></div>
+    </section>
+
+    <section id="tab-motors" class="tab">
+      <p class="hint">Live edits to the compiled model: no reset. Rebuilding the robot in the Model tab overwrites them. <b>Target</b> is the commanded joint angle when no policy is driving.</p>
+      <div class="tablewrap"><table id="motors"><thead><tr>
+        <th>Motor</th><th title="Stiffness, Nm/rad">kp</th><th title="Damping, Nms/rad">kv</th><th title="Torque limit, Nm">max&nbsp;Nm</th><th title="Passive joint damping">damp</th><th title="Rotor inertia">arm.</th><th>Target</th>
+      </tr></thead><tbody></tbody></table></div>
+    </section>
+
+    <section id="tab-sensors" class="tab">
+      <h3>Lidar</h3>
+      <label class="check"><input type="checkbox" id="l-enabled" checked> Enabled</label>
+      <div class="grid2">
+        <label>Rays per turn <input type="number" id="l-h" min="8" max="720" step="1"></label>
+        <label>Channels <input type="number" id="l-c" min="1" max="64" step="1"></label>
+        <label>Lowest angle (deg) <input type="number" id="l-vmin" min="-89" max="89" step="1"></label>
+        <label>Highest angle (deg) <input type="number" id="l-vmax" min="-89" max="89" step="1"></label>
+        <label>Range (m) <input type="number" id="l-range" min="1" max="40" step="1"></label>
+      </div>
+      <div class="info" id="l-info"></div>
+      <h3>Camera</h3>
+      <label class="check"><input type="checkbox" id="c-enabled"> Render camera</label>
+      <div class="grid2">
+        <label>Camera <select id="c-name"></select></label>
+        <label class="check"><input type="checkbox" id="c-depth"> Depth</label>
+      </div>
+      <img id="cam" alt="Camera view" hidden>
+      <div class="info bad" id="c-error"></div>
+      <h3>Body</h3>
+      <div class="info" id="s-body"></div>
+    </section>
+
+    <section id="tab-plan" class="tab">
+      <p class="hint"><b>Double-click the floor</b> to set a goal. Shift + double-click queues another one. The robot needs a walking policy (Train tab) to follow the path.</p>
+      <h3>Obstacles</h3>
+      <div class="row">
+        <label>Count <input type="number" id="o-n" value="14" min="1" max="60"></label>
+        <button id="o-random">Randomise</button><button id="o-clear">Clear</button>
+      </div>
+      <h3>Map and path</h3>
+      <label>Plan on
+        <select id="n-source">
+          <option value="truth">Ground-truth map</option>
+          <option value="lidar">Lidar-built map (what the robot has seen)</option>
+        </select>
+      </label>
+      <label class="check"><input type="checkbox" id="n-showmap" checked> Show lidar map on the floor</label>
+      <div class="row"><button id="n-clear">Clear goals</button><button id="n-resetmap">Forget lidar map</button></div>
+      <h3>Action planner</h3>
+      <div class="info" id="n-status"></div>
+      <label>Manual heading (deg), used when there is no goal
+        <input type="range" id="n-heading" min="-180" max="180" value="0" step="5"><output id="n-heading-o">0</output>
+      </label>
+    </section>
+
+    <section id="tab-train" class="tab">
+      <p class="hint">Evolves a walking controller in parallel on all CPU threads. Training uses the robot from the Model tab.</p>
+      <div class="grid2">
+        <label>Algorithm <select id="t-algo"><option value="es">Evolution strategy</option><option value="ga">Genetic algorithm</option></select></label>
+        <label>Run name <input type="text" id="t-name" value="run"></label>
+        <label>Population <input type="number" id="t-population" min="8" max="4096" step="8"></label>
+        <label>Generations <input type="number" id="t-generations" min="1" max="100000"></label>
+        <label>Episode (s) <input type="number" id="t-episode_seconds" min="1" max="60" step="1"></label>
+        <label>Threads (0 = all) <input type="number" id="t-threads" min="0" max="256"></label>
+        <label>Mutation sigma <input type="number" id="t-sigma" step="0.005" min="0.001"></label>
+        <label>Learning rate <input type="number" id="t-lr" step="0.001" min="0.0001"></label>
+        <label>Heading range (rad) <input type="number" id="t-heading_range" step="0.1" min="0" max="3.14"></label>
+      </div>
+      <label class="check"><input type="checkbox" id="t-evolve_body"> Evolve the body too (limb lengths, motor gains)</label>
+      <label class="check"><input type="checkbox" id="t-continue"> Continue from the loaded policy</label>
+      <div class="row"><button id="t-start" class="primary">Start training</button><button id="t-stop">Stop</button></div>
+      <div class="info" id="t-status">idle</div>
+      <canvas id="chart" width="600" height="260"></canvas>
+      <div class="legend"><span class="k1">best</span><span class="k2">current policy</span><span class="k3">population mean</span></div>
+      <h3>Trained policies</h3>
+      <label class="check"><input type="checkbox" id="auto-reset" checked> Reset automatically after a fall</label>
+      <div id="policies"></div>
+      <button id="p-unload">Unload policy</button>
+    </section>
+  </aside>
+  <div id="view">
+    <canvas id="gl"></canvas>
+    <div id="toast" hidden></div>
+  </div>
+</main>
+<script type="module" src="/static/app.js"></script>
+</body>
+</html>
