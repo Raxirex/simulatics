@@ -75,6 +75,37 @@ const stepMats = [new THREE.MeshBasicMaterial({ color: 0x4f9cf9, transparent: tr
 const dragArrow = new THREE.Mesh(arrowGeo, new THREE.MeshBasicMaterial({ color: 0xffffff }));
 dragArrow.visible = false; scene.add(dragArrow);
 
+// SLAM: ghost arrow at the estimated pose, uncertainty ellipse, and three trails
+const slamGroup = new THREE.Group(); scene.add(slamGroup);
+const slamArrow = new THREE.Mesh(new THREE.ConeGeometry(0.16, 0.5, 16).rotateZ(-Math.PI / 2),
+  new THREE.MeshBasicMaterial({ color: 0xc58cff, transparent: true, opacity: 0.75 }));
+const slamEllipse = new THREE.Mesh(new THREE.RingGeometry(0.95, 1.0, 48),
+  new THREE.MeshBasicMaterial({ color: 0xc58cff, transparent: true, opacity: 0.8, side: THREE.DoubleSide }));
+const trail = (color) => { const l = new THREE.Line(new THREE.BufferGeometry(), new THREE.LineBasicMaterial({ color }));
+  l.frustumCulled = false; return l; };
+const slamTraj = trail(0xc58cff), odomTraj = trail(0xf2695c), trueTraj = trail(0x4cc38a);
+slamGroup.add(slamArrow, slamEllipse, slamTraj, odomTraj, trueTraj);
+slamGroup.visible = false;
+let slamScans = -1;
+function onSlam(s, truePts) {
+  slamGroup.visible = !!s && $('n-showslam').checked;
+  if (!s) { $('n-slam').textContent = ''; return; }
+  const [x, y, yaw] = s.pose;
+  slamArrow.position.set(x, y, 0.06); slamArrow.rotation.set(0, 0, yaw);
+  const [a, b, ang] = s.ellipse || [0.02, 0.02, 0];
+  slamEllipse.position.set(x, y, 0.03); slamEllipse.rotation.set(0, 0, ang || 0);
+  slamEllipse.scale.set(Math.max(0.03, 3 * a), Math.max(0.03, 3 * b), 1);   // 3-sigma
+  if (s.scans !== slamScans) {
+    slamScans = s.scans;
+    const pts = (arr, z) => (arr || []).map(p => new THREE.Vector3(p[0], p[1], z));
+    slamTraj.geometry.setFromPoints(pts(s.traj, 0.035));
+    odomTraj.geometry.setFromPoints(pts(s.odom_traj, 0.03));
+    trueTraj.geometry.setFromPoints(pts(truePts, 0.025));
+  }
+  $('n-slam').textContent = `SLAM ${s.state}  score ${fixed(s.score, 2)}  sigma ${fixed(100 * a, 1)} cm / ${fixed(s.sigma_yaw_deg, 1)} deg` +
+    `  ${s.scans} scans, ${fixed(s.match_ms, 1)} ms\npurple: SLAM estimate   red: odometry only   green: true path`;
+}
+
 function b64(str, Type) {
   const bin = atob(str), u8 = new Uint8Array(bin.length);
   for (let i = 0; i < bin.length; i++) u8[i] = bin.charCodeAt(i);
@@ -240,6 +271,7 @@ function onFrame(f) {
     `planner: ${nav.state}, node ${nav.node}, goals queued ${nav.goals.length}${nav.message ? '\n' + nav.message : ''}${err}${herr}`;
   $('hud').textContent = nav.goals.length || nav.state === 'reached' || nav.state === 'failed' || nav.state === 'fallen'
     ? `${nav.state}${nav.message ? ': ' + nav.message : ''}${err}${herr}` : '';
+  onSlam(f.slam, f.slam_true);
   if (f.arms) onArms(f.arms);
   if (f.train) onTrain(f.train);
   if (f.pilot) onPilot(f.pilot);

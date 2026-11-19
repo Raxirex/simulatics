@@ -141,8 +141,11 @@
         <select id="n-source">
           <option value="truth">Ground-truth map</option>
           <option value="lidar">Lidar-built map (what the robot has seen)</option>
+          <option value="slam">SLAM map and SLAM pose (no ground truth)</option>
         </select>
       </label>
+      <label class="check"><input type="checkbox" id="n-showslam" checked> Show SLAM estimate (ghost arrow, trajectories)</label>
+      <div class="info" id="n-slam"></div>
       <label class="check"><input type="checkbox" id="n-showmap" checked> Show lidar map on the floor</label>
       <label class="check"><input type="checkbox" id="n-showsteps" checked> Show planned footsteps</label>
       <div class="row"><button id="n-resetmap">Forget lidar map</button></div>

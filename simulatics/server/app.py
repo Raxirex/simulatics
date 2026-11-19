@@ -291,11 +291,16 @@ def create_app() -> FastAPI:
         with sess.lock:
             if d.get("action") == "clear":
                 sess.nav.clear()
-            if d.get("source") in ("truth", "lidar"):
-                sess.nav.source = d["source"]
+            if d.get("source") in ("truth", "lidar", "slam"):
+                sess.nav_on_slam = d["source"] == "slam"
+                # SLAM: plan on the map built from the estimated pose (its log-odds layer acts as "lidar")
+                sess.nav.grid = sess.slam_grid if sess.nav_on_slam else sess.grid
+                sess.nav.source = "lidar" if sess.nav_on_slam else d["source"]
                 sess.nav.path = np.zeros((0, 2))
+                sess.map_seq += 1
             if d.get("action") == "reset_map":
                 sess.grid.reset_lidar()
+                sess.reset_slam()
         return sess.nav.to_dict()
 
     @app.post("/api/model/load")
@@ -614,7 +619,14 @@ def create_app() -> FastAPI:
                 if sess.map_seq != map_seq:
                     map_seq = sess.map_seq
                     with sess.lock:
-                        img = sess.grid.lidar_image() + 3 * sess.grid.truth  # 0..2 lidar, +3 where truth occupied
+                        if sess.nav_on_slam:
+                            lo = sess.slam.resampled(sess.grid.res)  # SLAM map, shown on the same 0.1 m grid
+                            img = np.zeros(lo.shape, np.uint8)
+                            img[lo < -0.5] = 1
+                            img[lo > 0.5] = 2
+                        else:
+                            img = sess.grid.lidar_image()
+                        img = img + 3 * sess.grid.truth  # 0..2 map, +3 where truth occupied
                     await sock.send_bytes(b"\x03" + struct.pack("<I", sess.grid.n) + img.tobytes())
                 await asyncio.sleep(1 / 30)
         except (WebSocketDisconnect, RuntimeError):

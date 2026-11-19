@@ -52,6 +52,27 @@ def test_push_moves_the_standing_robot_without_a_fall(sess):
         sess.push("up")
 
 
+def test_navigation_on_the_slam_map_and_pose(sess):
+    sess.lidar_cfg.enabled = True
+    sess.random_obstacles(10, seed=7)
+    with sess.lock:
+        sess.nav_on_slam = True
+        sess.nav.grid, sess.nav.source = sess.slam_grid, "lidar"
+        sess.running = True
+    time.sleep(1.0)  # a few scans to start the map
+    with sess.lock:
+        sess.nav.set_goal([2.5, 1.0])
+    assert wait_for(lambda: sess.nav.state in ("reached", "failed", "fallen"), timeout=90), sess.nav.to_dict()
+    assert sess.nav.state == "reached", sess.nav.to_dict()
+    with sess.lock:
+        x, y, _ = base_pose(sess.data)
+        ex, ey, _ = sess.slam.pose
+        assert sess.slam.scans > 20
+    assert np.hypot(ex - x, ey - y) < 0.15, ((x, y), (ex, ey))  # SLAM agrees with the truth
+    assert np.hypot(x - 2.5, y - 1.0) < 0.2                     # and the robot got there
+    assert sess.falls == 0
+
+
 def test_click_to_walk_reaches_queued_goals_precisely(sess):
     with sess.lock:
         sess.nav.set_goal([1.2, 0.0])

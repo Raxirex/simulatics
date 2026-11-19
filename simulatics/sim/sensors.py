@@ -55,7 +55,9 @@ class Lidar:
         mujoco.mj_multiRay(model, data, origin, dirs.reshape(-1), self.groups, True,
                            -1 if self.groups is not None else self.root,
                            self._geomid, self._dist, None, self.n, self.cfg.max_range)
-        hit = self._dist >= 0
+        # mj_multiRay's cutoff prunes geoms by bounding volume only, so far hits can still come back:
+        # enforce the sensor's range here
+        hit = (self._dist >= 0) & (self._dist <= self.cfg.max_range)
         dist = np.where(hit, self._dist, self.cfg.max_range)
         return origin, origin + dirs * dist[:, None], dist, hit
 

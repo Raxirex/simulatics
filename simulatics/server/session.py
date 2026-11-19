@@ -85,6 +85,13 @@ class SimSession:
         self.rl_policy = None            # PPO / distilled policy (train/ppo.py RLPolicy)
         self._arm_tick = 0
         self._push = None                # (end sim time, world force) while a push is applied
+        # SLAM: localises from noisy leg odometry + lidar only, never from the true pose
+        from ..plan.slam import OdomNoise, Slam2D
+        self.slam = Slam2D(size=self.grid.size, res=0.05, odom_noise=OdomNoise(), seed=0)
+        self.slam_grid = self.slam.gridmap()
+        self.slam_true: list = []        # true positions, to draw against the estimate
+        self._slam_t = -1.0
+        self.nav_on_slam = False         # plan with the SLAM map and the SLAM pose
         self.build()
         self._thread = threading.Thread(target=self._loop, name="sim", daemon=True)
         self._thread.start()
@@ -184,6 +191,21 @@ class SimSession:
             if hasattr(self, "nav"):
                 self.nav.clear()
                 self.nav.take_new_path()
+            self.reset_slam()
+
+    def reset_slam(self) -> None:
+        """Restart SLAM at the robot's current pose: the only time it is given the truth, so the map frame
+        lines up with the world in the 3D view. Every reset, rebuild and fall teleports the robot."""
+        if getattr(self, "slam", None) is None or self.task is None:
+            return
+        from ..plan.slam import root_pose
+        with self.lock:
+            p = root_pose(self.data, 1)
+            self.slam.reset(p)
+            self.slam.odometry.reset(p)
+            self.slam_true.clear()
+            self._slam_t = -1.0
+            self.map_seq += 1
 
     def set_params(self, d: dict) -> None:
         with self.lock:
@@ -398,6 +420,9 @@ class SimSession:
                                **_jsonable(self.controller.status() if self.controller else {})},
                 "arms": _jsonable(self.arms.status()) if self.arms is not None else None,
                 "pilot": self.pilot.brief(),
+                "slam": self.slam.to_dict() if self.task is not None and self.slam.scans else None,
+                "slam_true": np.round(np.asarray(self.slam_true[::max(1, len(self.slam_true) // 400)]), 3).tolist(),
+                "nav_on_slam": self.nav_on_slam,
             }
 
     # ---- simulation thread -----------------------------------------------
@@ -431,10 +456,21 @@ class SimSession:
         m, d, task, c = self.model, self.data, self.task, self.controller
         if task is not None:
             x, y, yaw = base_pose(d)
-            self.nav.tick((x, y), yaw, c.status())
-            new = self.nav.take_new_path()
-            if new is not None:
-                c.set_path(*new)
+            if self.nav_on_slam:
+                # plan where SLAM thinks the robot is; convert paths into the controller's (true) frame
+                ex, ey, eyaw = self.slam.pose
+                self.nav.tick((ex, ey), eyaw, c.status())
+                new = self.nav.take_new_path()
+                if new is not None:
+                    path, gyaw = new
+                    tp = (x, y, yaw)
+                    c.set_path(self.slam.to_controller_frame(path, tp) if len(path) else path,
+                               None if gyaw is None else gyaw + yaw - eyaw)
+            else:
+                self.nav.tick((x, y), yaw, c.status())
+                new = self.nav.take_new_path()
+                if new is not None:
+                    c.set_path(*new)
             if isinstance(c, PolicyController):
                 c.heading = self.heading
         c.step(m, d)
@@ -476,6 +512,19 @@ class SimSession:
             self.lidar_seq += 1
             self.grid.integrate_lidar(origin, pts, hit, self.lidar_cfg.h_samples)
             if self.lidar_seq % 5 == 0:
+                self.map_seq += 1
+        # SLAM runs on simulation time (10 Hz), so fast-forwarding does not stretch the motion between scans
+        if self.task is not None and self.lidar_cfg.enabled and self.data.time - self._slam_t >= 0.1 - 1e-9:
+            from ..plan.slam import planar_scan, root_pose
+            self._slam_t = float(self.data.time)
+            origin, pts, _, hit = self.lidar.scan(self.model, self.data)
+            sc = planar_scan(self.data, origin, pts, hit, self.lidar_cfg.h_samples, self.lidar.root)
+            tp = root_pose(self.data, self.lidar.root)
+            odom = self.slam.odometry.update(tp)          # simulated leg odometry (with drift)
+            self.slam.update(odom, sc.points, sc.hit, sc.origin, match=sc.match)
+            self.slam_true.append(tp[:2].copy())
+            del self.slam_true[:-4000]
+            if self.slam.scans % 5 == 0 and self.nav_on_slam:
                 self.map_seq += 1
         if self.camera_cfg["enabled"] and now - self._t_cam >= 0.1:
             self._t_cam = now
