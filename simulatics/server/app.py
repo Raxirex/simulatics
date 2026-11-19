@@ -28,6 +28,7 @@ RUNS = Path("runs")
 TRAIN_PRESETS = {
     "ppo": {"population": 256, "generations": 1500, "lr": 0.001, "threads": 8, "episode_seconds": 20},
     "distill": {"population": 64, "generations": 8, "lr": 0.001, "threads": 4, "episode_seconds": 10},
+    "imitation": {"population": 64, "generations": 1500, "lr": 0.001, "threads": 4, "episode_seconds": 10},
     "es": {"population": 256, "generations": 200, "lr": 0.005, "sigma": 0.01, "threads": 0, "episode_seconds": 8},
     "ga": {"population": 256, "generations": 200, "lr": 0.005, "sigma": 0.01, "threads": 0, "episode_seconds": 8},
 }
@@ -107,10 +108,20 @@ def create_app() -> FastAPI:
     def policies() -> list[dict]:
         from ..train.ppo import RLPolicy, is_rl_policy
         out = []
-        for p in sorted(list(RUNS.glob("*/policy.npz")) + list(RUNS.glob("*/rl_policy.npz")),
-                        key=lambda p: -p.stat().st_mtime):
+        for p in sorted(list(RUNS.glob("*/policy.npz")) + list(RUNS.glob("*/rl_policy.npz"))
+                        + list(RUNS.glob("*/imitation_policy.npz")), key=lambda p: -p.stat().st_mtime):
             try:
-                if p.name == "rl_policy.npz":
+                if p.name == "imitation_policy.npz":
+                    from ..imitate import is_imitation_policy
+                    if not is_imitation_policy(p):
+                        continue
+                    ev = RUNS / p.parent.name / "evaluation.json"
+                    meta, kind = {"algo": "imitation"}, "imitation"
+                    if ev.exists():
+                        import json
+                        e = json.loads(ev.read_text())
+                        meta["fitness"] = e.get("reward_per_step", e.get("mean_reward"))
+                elif p.name == "rl_policy.npz":
                     if not is_rl_policy(p):
                         continue
                     meta = RLPolicy.load(p).meta or {}
@@ -198,6 +209,11 @@ def create_app() -> FastAPI:
     def obstacles(d: dict = Body(...)):
         if d.get("action") == "random":
             guard(sess.random_obstacles, int(np.clip(d.get("n", 12), 1, 60)), d.get("seed"))
+        elif d.get("action") == "terrain":
+            kind = str(d.get("kind", "mixed"))
+            gx, gy = guard(sess.terrain_course, kind, d.get("seed"))
+            state["cad"] = None
+            return {"scene": sess.scene(), "obstacles": len(sess.obstacles), "props": 0, "goal": [gx, gy]}
         elif d.get("action") == "manipulation":
             if not sess.params.hands or not sess.params.arms:
                 guard(sess.set_params, {"arms": True, "hands": True})
@@ -350,6 +366,15 @@ def create_app() -> FastAPI:
                 init = ck if ck.exists() else None
             tr = guard(PPOTrainer, cfg, sess.params, VelTaskConfig(), model_xml=sess.custom_path, runs_dir=RUNS,
                        init_checkpoint=init)
+        elif algo == "imitation":
+            from ..imitate import ImitationTrainer, imitation_ppo_config
+            cfg = imitation_ppo_config(name=name, num_envs=int(np.clip(d.get("population", 64), 4, 1024)),
+                                       iterations=int(np.clip(d.get("generations", 1500), 1, 1000000)),
+                                       threads=int(d.get("threads") or 4))
+            motion = str(d.get("motion") or "walk")
+            mpath = RUNS / "motions" / f"{motion}.npz"
+            tr = guard(ImitationTrainer, cfg, str(mpath) if mpath.exists() else motion, base=sess.params,
+                       runs_dir=RUNS)
         elif algo == "distill":
             tr = _DistillJob(sess.export_xml(), sess.params, name, int(np.clip(d.get("generations", 8), 1, 50)),
                              int(np.clip(d.get("population", 8), 1, 64)))
@@ -361,7 +386,7 @@ def create_app() -> FastAPI:
             init = sess.policy if d.get("continue_from_loaded") else None
             tr = Trainer(cfg, sess.params, sess.task_cfg, model_xml=sess.custom_path, runs_dir=RUNS, init_policy=init)
         else:
-            raise HTTPException(400, "algo must be ppo, distill, es or ga")
+            raise HTTPException(400, "algo must be ppo, distill, imitation, es or ga")
         state["trainer"] = tr
         tr.start()
         return train_status()
@@ -385,6 +410,10 @@ def create_app() -> FastAPI:
         p = Path(d["path"]).resolve()
         if RUNS.resolve() not in p.parents or p.suffix != ".npz":
             raise HTTPException(400, "policy must be a .npz inside the runs folder")
+        if p.name == "imitation_policy.npz":
+            guard(sess.play_motion, None, "policy", str(p))
+            sess.policy_name = p.parent.name
+            return {**full_state(), "policy": p.parent.name}
         guard(sess.load_policy, str(p))
         state["cad"] = None
         return {**full_state(), "policy": sess.policy_name}
@@ -393,6 +422,39 @@ def create_app() -> FastAPI:
     def policy_unload():
         sess.unload_policy()
         return {"ok": True}
+
+    # ---- motion imitation ----------------------------------------------------
+    @app.get("/api/motions")
+    def motions():
+        from ..imitate import list_motions
+        return _finite(list_motions(extra_dirs=[RUNS / "motions"]))
+
+    @app.post("/api/motions/play")
+    def motions_play(d: dict = Body(...)):
+        mode = str(d.get("mode", "preview"))
+        policy = d.get("policy")
+        if policy:
+            p = Path(policy).resolve()
+            if RUNS.resolve() not in p.parents or p.suffix != ".npz":
+                raise HTTPException(400, "policy must be a .npz inside the runs folder")
+            policy = str(p)
+        msg = guard(sess.play_motion, d.get("motion"), mode, policy)
+        return {"message": msg, "controller": sess.controller.name}
+
+    @app.post("/api/motions/import")
+    def motions_import(d: dict = Body(...)):
+        from ..imitate import retarget_bvh
+        src = Path(str(d.get("path", "")).strip().strip('"')).expanduser()
+        if not src.is_file() or src.suffix.lower() != ".bvh":
+            raise HTTPException(400, f"not a .bvh file: {src}")
+        name = "".join(c for c in str(d.get("name") or src.stem) if c.isalnum() or c in "-_") or "imported"
+        with sess.lock:
+            model = sess.model
+        res = guard(retarget_bvh, src, model)
+        out = RUNS / "motions" / f"{name}.npz"
+        out.parent.mkdir(parents=True, exist_ok=True)
+        res.motion.save(out)
+        return _finite({"name": name, "path": str(out), "report": res.report})
 
     # ---- ROS 2 bridge --------------------------------------------------------
     def ros_status() -> dict:

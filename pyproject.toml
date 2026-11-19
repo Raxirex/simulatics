@@ -35,7 +35,7 @@ simulatics = "simulatics.__main__:main"
 include = ["simulatics*"]
 
 [tool.setuptools.package-data]
-simulatics = ["server/static/*", "native/src/*", "native/CMakeLists.txt"]
+simulatics = ["server/static/*", "native/src/*", "native/CMakeLists.txt", "imitate/motions/*.npz"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]

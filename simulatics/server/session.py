@@ -83,6 +83,8 @@ class SimSession:
         self.robot = SessionRobot(self)  # RobotInterface for AI pilots
         self.pilot = PilotRunner(self.robot)
         self.rl_policy = None            # PPO / distilled policy (train/ppo.py RLPolicy)
+        self.imitation_policy: str | None = None   # path of a trained motion-tracking policy
+        self.motion_name: str | None = None        # clip name or .npz path for preview / PD playback
         self._arm_tick = 0
         self._push = None                # (end sim time, world force) while a push is applied
         # SLAM: localises from noisy leg odometry + lidar only, never from the true pose
@@ -152,6 +154,14 @@ class SimSession:
         if getattr(self, "rl_policy", None) is not None and kind in ("auto", "rl"):
             from ..train.ppo import RLController
             return RLController(m, self.rl_policy)
+        if kind in ("imitation", "motion-preview", "motion-pd"):
+            from ..imitate import ImitationController, MotionPreviewController, PDPlaybackController, load_motion
+            if kind == "imitation" and self.imitation_policy:
+                return ImitationController(m, self.imitation_policy)
+            if kind in ("motion-preview", "motion-pd") and self.motion_name:
+                motion = load_motion(self.motion_name)
+                return (MotionPreviewController(m, motion) if kind == "motion-preview"
+                        else PDPlaybackController(m, motion))
         if kind == "mpc":
             try:
                 from ..control.mpc import MPCWalkController
@@ -167,6 +177,26 @@ class SimSession:
             except ImportError:
                 pass
         return ManualController(m, self.manual_ctrl)
+
+    def play_motion(self, motion: str | None, mode: str, policy: str | None = None) -> str:
+        """Play a reference motion: "preview" (kinematic), "pd" (servos + balance) or "policy" (learned tracker)."""
+        kinds = {"preview": "motion-preview", "pd": "motion-pd", "policy": "imitation"}
+        if mode not in kinds:
+            raise ValueError("mode must be preview, pd or policy")
+        with self.lock:
+            if mode == "policy":
+                if not policy:
+                    raise ValueError("choose a trained imitation policy")
+                self.imitation_policy = policy
+            else:
+                self.motion_name = motion
+            self.controller_kind = kinds[mode]
+            self.controller = self._make_controller()
+            if self.controller.name != kinds[mode]:
+                raise ValueError("could not start that motion on this robot")
+            self.reset()
+            self.running = True
+        return f"playing {motion or Path(policy).parent.name} ({mode})"
 
     def set_controller(self, kind: str) -> None:
         with self.lock:
@@ -243,6 +273,16 @@ class SimSession:
             if not self.custom_path:
                 self.build()
 
+    def terrain_course(self, kind: str = "mixed", seed: int | None = None) -> tuple[float, float]:
+        """Build a terrain course (steps, stairs, ramp, mixed) and return the goal just beyond it."""
+        from ..sim.terrain import terrain_course
+        obstacles, goal = terrain_course(kind, seed)
+        with self.lock:
+            self.obstacles, self.props, self.cad_xml = obstacles, [], None
+            if not self.custom_path:
+                self.build()
+        return float(goal[0]), float(goal[1])
+
     def manipulation_scene(self, seed: int | None = None) -> None:
         """A table in front of the robot with small graspable objects on it."""
         from ..sim.scene import manipulation_scene
@@ -300,7 +340,8 @@ class SimSession:
         with self.lock:
             self.policy, self.policy_name = None, ""
             self.rl_policy = None
-            if self.controller_kind in ("es-policy", "rl"):
+            self.imitation_policy = None
+            if self.controller_kind in ("es-policy", "rl", "imitation", "motion-preview", "motion-pd"):
                 self.controller_kind = "auto"
             self.controller = self._make_controller()
             self.reset()
@@ -474,7 +515,7 @@ class SimSession:
             if isinstance(c, PolicyController):
                 c.heading = self.heading
         c.step(m, d)
-        if self.arms is not None:
+        if self.arms is not None and getattr(c, "name", "") not in ("imitation", "motion-preview", "motion-pd"):
             # Only arms that received a command write ctrl, so idle arms keep the Motors-tab targets.
             # The arm IK runs at its own (lower) rate; it times itself from data.time.
             self._arm_tick += 1

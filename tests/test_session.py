@@ -52,6 +52,37 @@ def test_push_moves_the_standing_robot_without_a_fall(sess):
         sess.push("up")
 
 
+def test_terrain_course_is_walked_across(sess):
+    gx, gy = sess.terrain_course("stairs", seed=0)
+    assert any(o.get("kind") == "terrain" for o in sess.obstacles)
+    assert sess.grid.truth.sum() == 0          # stairs are walkable, not walls, for the planner
+    with sess.lock:
+        sess.nav.set_goal([gx, gy], yaw=0.0)
+        sess.running = True
+    assert wait_for(lambda: sess.nav.state in ("reached", "failed", "fallen"), timeout=120), sess.nav.to_dict()
+    assert sess.nav.state == "reached", sess.nav.to_dict()
+    assert sess.falls == 0
+
+
+def test_motion_preview_and_trained_imitation_policy_play(sess):
+    import pathlib
+    msg = sess.play_motion("wave", "preview")
+    assert "wave" in msg and sess.controller.name == "motion-preview"
+    time.sleep(1.0)
+    policy = pathlib.Path("runs/imitate_walk/imitation_policy.npz")
+    if not policy.exists():
+        pytest.skip("trained imitation policy not present")
+    sess.play_motion(None, "policy", str(policy.resolve()))
+    assert sess.controller.name == "imitation"
+    with sess.lock:
+        x0 = float(sess.data.qpos[0])
+        t0 = float(sess.data.time)
+    assert wait_for(lambda: sess.data.time > t0 + 6.0, timeout=60)
+    with sess.lock:
+        moved = abs(float(sess.data.qpos[0]) - x0) + abs(float(sess.data.qpos[1]))
+    assert sess.falls == 0 and moved > 0.5   # it walks the reference clip without falling
+
+
 def test_mpc_controller_choice_walks_to_a_goal(sess):
     sess.set_controller("mpc")
     assert sess.controller.name == "mpc"

@@ -257,13 +257,14 @@ function onFrame(f) {
     }
   }
   const steps = $('n-showsteps').checked ? (c.footsteps || []).slice(0, 40) : [];
-  const sk = JSON.stringify(steps);
+  const sk = JSON.stringify([steps, c.footsteps_z]);
   if (sk !== lastStepsKey) {
     lastStepsKey = sk; stepGroup.clear();
-    for (const s of steps) {
+    const zs = c.footsteps_z || [];
+    steps.forEach((s, i) => {
       const m = new THREE.Mesh(new THREE.PlaneGeometry(0.22, 0.09), stepMats[s[3] ? 1 : 0]);
-      m.position.set(s[0], s[1], 0.012); m.rotation.set(0, 0, s[2]); stepGroup.add(m);
-    }
+      m.position.set(s[0], s[1], (zs[i] || 0) + 0.012); m.rotation.set(0, 0, s[2]); stepGroup.add(m);
+    });
   }
   const err = c.goal_error_m != null ? `  error ${fixed(c.goal_error_m, 3)} m` : '';
   const herr = c.heading_error_deg != null ? ` / ${fixed(c.heading_error_deg, 1)} deg` : '';
@@ -279,7 +280,7 @@ function onFrame(f) {
 function onTrain(t) {
   const last = t.last;
   $('t-status').textContent = t.state === 'idle' ? 'idle' :
-    `${t.name}: ${t.state}  ${t.kind === 'ppo' || t.kind === 'distill' ? 'iteration' : 'generation'} ${t.generation} / ${t.generations}` +
+    `${t.name}: ${t.state}  ${['ppo', 'distill', 'imitation'].includes(t.kind) ? 'iteration' : 'generation'} ${t.generation} / ${t.generations}` +
     (t.best != null ? `\nbest ${fixed(t.best)}` : '') +
     (last && last.sps ? `   ${(last.sps / 1000).toFixed(0)}k steps/s` : '') +
     (t.total_steps ? `\n${(t.total_steps / 1e6).toFixed(1)} M steps simulated` : '') + (t.error ? `\n${t.error}` : '');
@@ -402,7 +403,7 @@ const TRAIN_SERIES = [['mean', '#98a0ad'], ['center', '#4f9cf9'], ['best', '#4cc
 // ---------------------------------------------------------------- training
 async function refreshTraining() {
   const [st, pol] = await Promise.all([api('/api/train/status'), api('/api/policies')]);
-  drawChart('chart', st.history || [], TRAIN_SERIES, st.kind === 'ppo' || st.kind === 'distill' ? 'iteration' : 'generation');
+  drawChart('chart', st.history || [], TRAIN_SERIES, ['ppo', 'distill', 'imitation'].includes(st.kind) ? 'iteration' : 'generation');
   buildPolicies(pol);
 }
 function buildPolicies(list) {
@@ -421,10 +422,11 @@ function buildPolicies(list) {
   }
 }
 function updateTrainForm() {
-  const algo = $('t-algo').value, rl = algo === 'ppo' || algo === 'distill';
+  const algo = $('t-algo').value, rl = algo === 'ppo' || algo === 'distill' || algo === 'imitation';
   document.querySelectorAll('.es-only').forEach(e => e.classList.toggle('hidden', rl));
   $('t-pop-label').textContent = rl ? 'Parallel environments' : 'Population';
-  $('t-gen-label').textContent = algo === 'ppo' ? 'Iterations' : algo === 'distill' ? 'DAgger rounds' : 'Generations';
+  $('t-gen-label').textContent = algo === 'ppo' || algo === 'imitation' ? 'Iterations'
+    : algo === 'distill' ? 'DAgger rounds' : 'Generations';
 }
 
 // ---------------------------------------------------------------- arms
@@ -563,6 +565,15 @@ function wire(s) {
   });
   $('ros-disconnect').addEventListener('click', async () => showRos(await api('/api/ros/disconnect', {})));
 
+  // terrain courses
+  $('tc-build').addEventListener('click', async () => {
+    const r = await api('/api/obstacles', { action: 'terrain', kind: $('tc-kind').value });
+    buildScene(r.scene);
+    await api('/api/goal', { x: r.goal[0], y: r.goal[1], yaw_deg: 0 });
+    await api('/api/sim', { action: 'play' });
+    toast(`Walking across the ${$('tc-kind').selectedOptions[0].text.toLowerCase()} to (${fixed(r.goal[0], 1)}, ${fixed(r.goal[1], 1)})`, true);
+  });
+
   // walking
   $('ctrl-kind').addEventListener('change', async (e) => {
     const r = await api('/api/controller', { kind: e.target.value });
@@ -642,11 +653,31 @@ function wire(s) {
   $('t-algo').dispatchEvent(new Event('change'));
   $('t-start-train').addEventListener('click', async () => {
     const d = { algo: $('t-algo').value, name: $('t-name').value, evolve_body: $('t-evolve_body').checked,
-      continue_from_loaded: $('t-continue').checked };
+      continue_from_loaded: $('t-continue').checked, motion: $('m-clip').value };
     tf.forEach(k => { d[k] = +$('t-' + k).value; });
     await api('/api/train/start', d); toast('Training started', true);
   });
   $('t-stop-train').addEventListener('click', () => api('/api/train/stop', {}));
+
+  // motions (imitation)
+  const loadMotions = async (select) => {
+    const list = await api('/api/motions');
+    const sel = $('m-clip'), cur = select || sel.value; sel.innerHTML = '';
+    for (const m of list) sel.add(new Option(`${m.name} (${fixed(m.duration_s, 1)} s${m.library ? '' : ', imported'})`, m.name));
+    if ([...sel.options].some(o => o.value === cur)) sel.value = cur;
+  };
+  loadMotions().catch(() => {});
+  const play = (mode) => api('/api/motions/play', { motion: $('m-clip').value, mode }).then(r => toast(r.message, true));
+  $('m-preview').addEventListener('click', () => play('preview'));
+  $('m-pd').addEventListener('click', () => play('pd'));
+  $('m-import').addEventListener('click', async () => {
+    $('m-info').textContent = 'retargeting...';
+    const r = await api('/api/motions/import', { path: $('m-bvh').value });
+    const rep = r.report || {};
+    $('m-info').textContent = `imported "${r.name}": key-point error mean ${fixed(100 * (rep.key_error_mean_m ?? NaN), 1)} cm, ` +
+      `max ${fixed(100 * (rep.key_error_max_m ?? NaN), 1)} cm; leg scale ${fixed(rep.leg_scale, 2)}`;
+    await loadMotions(r.name);
+  });
   $('p-unload').addEventListener('click', () => api('/api/policy/unload', {}));
   $('auto-reset').addEventListener('change', (e) => api('/api/sim', { auto_reset: e.target.checked }));
 }

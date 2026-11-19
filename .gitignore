@@ -7,5 +7,10 @@ simulatics/native/build/
 simulatics/native/bin/
 runs/*
 !runs/pretrained_walker/
+!runs/imitate_walk/
+runs/imitate_walk/*
+!runs/imitate_walk/imitation_policy.npz
+!runs/imitate_walk/evaluation.json
+!runs/imitate_walk/config.json
 MUJOCO_LOG.TXT
 .claude/

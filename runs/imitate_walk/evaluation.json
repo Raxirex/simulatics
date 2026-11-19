@@ -1,0 +1,63 @@
+{
+  "zero_action_start0": {
+    "envs": 16,
+    "seconds": 25.0,
+    "fell_frac": 1.0,
+    "survival_s": 2.52,
+    "survival_min_s": 2.52,
+    "joint_err_deg": 1.2185,
+    "ee_err_m": 0.1023,
+    "root_err_m": 0.1019,
+    "reward_per_step": 0.8769,
+    "zero_action": true,
+    "motion": "walk"
+  },
+  "zero_action_rsi": {
+    "envs": 16,
+    "seconds": 25.0,
+    "fell_frac": 1.0,
+    "survival_s": 2.7912,
+    "survival_min_s": 2.52,
+    "joint_err_deg": 1.1102,
+    "ee_err_m": 0.0926,
+    "root_err_m": 0.0887,
+    "reward_per_step": 0.8908,
+    "zero_action": true,
+    "motion": "walk"
+  },
+  "policy_start0": {
+    "envs": 16,
+    "seconds": 25.0,
+    "fell_frac": 0.0,
+    "survival_s": 25.0,
+    "survival_min_s": 25.0,
+    "joint_err_deg": 0.2056,
+    "ee_err_m": 0.0027,
+    "root_err_m": 0.0066,
+    "reward_per_step": 0.999,
+    "zero_action": false,
+    "motion": "walk"
+  },
+  "policy_rsi": {
+    "envs": 16,
+    "seconds": 25.0,
+    "fell_frac": 0.0,
+    "survival_s": 25.0,
+    "survival_min_s": 25.0,
+    "joint_err_deg": 0.2057,
+    "ee_err_m": 0.0027,
+    "root_err_m": 0.0066,
+    "reward_per_step": 0.999,
+    "zero_action": false,
+    "motion": "walk"
+  },
+  "controller": {
+    "seconds": 25.02,
+    "fell": false,
+    "fall_time_s": null,
+    "distance_x_m": 5.682,
+    "joint_err_deg": 0.205,
+    "ee_err_m": 0.0027,
+    "root_err_m": 0.0066
+  }
+}
