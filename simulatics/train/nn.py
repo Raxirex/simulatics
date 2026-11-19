@@ -303,16 +303,22 @@ class Adam:
 # ---- observation normalisation -----------------------------------------------------------------------
 class RunningMeanStd:
     """Running mean / variance over batches (parallel-variance formula of Chan et al.), as in common PPO
-    implementations. `normalize` clips to +-clip standard deviations."""
+    implementations. `normalize` clips to +-clip standard deviations.
 
-    def __init__(self, dim: int, clip: float = 10.0, eps: float = 1e-2):
+    `std_floor` (scalar or per-feature) is a lower bound on the standard deviation used for normalising. A
+    feature that never varied in the data (a command that was always zero, a clock that never ran) would
+    otherwise be divided by `eps` and blow any later non-zero value up to the clip limit."""
+
+    def __init__(self, dim: int, clip: float = 10.0, eps: float = 1e-2, std_floor=0.0):
         self.mean = np.zeros(dim)
         self.var = np.ones(dim)
         self.count = 0.0
         self.clip, self.eps = float(clip), float(eps)
+        self.std_floor = np.broadcast_to(np.asarray(std_floor, np.float64), (dim,)).copy()
 
     def update(self, x: np.ndarray) -> None:
         x = np.asarray(x, np.float64).reshape(-1, self.mean.size)
+        x = x[np.isfinite(x).all(axis=1)]  # one NaN row would poison the statistics for good
         if x.shape[0] == 0:
             return
         n, m, v = x.shape[0], x.mean(axis=0), x.var(axis=0)
@@ -324,18 +330,22 @@ class RunningMeanStd:
 
     @property
     def std(self) -> np.ndarray:
-        return np.sqrt(self.var) + self.eps
+        return np.maximum(np.sqrt(np.maximum(self.var, 0.0)) + self.eps, self.std_floor)
 
     def normalize(self, x: np.ndarray) -> np.ndarray:
         return np.clip((x - self.mean) / self.std, -self.clip, self.clip)
 
     def to_arrays(self, prefix: str) -> dict[str, np.ndarray]:
-        return {f"{prefix}mean": self.mean, f"{prefix}var": self.var, f"{prefix}count": np.array(self.count),
-                f"{prefix}clip": np.array(self.clip), f"{prefix}eps": np.array(self.eps)}
+        out = {f"{prefix}mean": self.mean, f"{prefix}var": self.var, f"{prefix}count": np.array(self.count),
+               f"{prefix}clip": np.array(self.clip), f"{prefix}eps": np.array(self.eps)}
+        if np.any(self.std_floor > 0):
+            out[f"{prefix}std_floor"] = self.std_floor
+        return out
 
     @classmethod
     def from_arrays(cls, arrays, prefix: str) -> "RunningMeanStd":
-        r = cls(len(arrays[f"{prefix}mean"]), float(arrays[f"{prefix}clip"]), float(arrays[f"{prefix}eps"]))
+        r = cls(len(arrays[f"{prefix}mean"]), float(arrays[f"{prefix}clip"]), float(arrays[f"{prefix}eps"]),
+                np.array(arrays[f"{prefix}std_floor"], np.float64) if f"{prefix}std_floor" in arrays else 0.0)
         r.mean = np.array(arrays[f"{prefix}mean"], np.float64)
         r.var = np.array(arrays[f"{prefix}var"], np.float64)
         r.count = float(arrays[f"{prefix}count"])

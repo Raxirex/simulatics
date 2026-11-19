@@ -10,7 +10,7 @@ import mujoco
 import numpy as np
 import pytest
 
-from simulatics.control.base import Controller
+from simulatics.control.base import Controller, base_pose
 from simulatics.models import HumanoidParams, build_mjcf
 from simulatics.sim.vec_env import VecEnv
 from simulatics.sim.vel_task import VelocityTask, VelTaskConfig, make_variants
@@ -423,6 +423,221 @@ def test_evaluate_policy_starts_with_an_empty_history(humanoid):
     p = VelocityTask(humanoid, cfg).proprio_dim
     assert np.all(seen[0][:, p:] == 0.0)  # no past frames yet
     assert np.allclose(seen[1][:, p:2 * p], seen[0][:, :p])  # then the previous frame, with the real command
+
+
+# ---- reviewer fixes (a)-(e), the walker step clock, mirror symmetry --------------------------------------
+def _steps_cfg(**kw):
+    """A "steps"-clock task like walker_task_config makes, without needing the walker."""
+    base = dict(clock="steps", clock_start_s=0.6, clock_ss_s=0.485, clock_ds_s=0.135, decimation=2, history=2)
+    return VelTaskConfig(**{**base, **kw})
+
+
+def test_contact_phase_rewards_stepping_when_turning_in_place(humanoid):
+    """(a) A pure yaw-rate command used to count as standing, so the contact-phase term paid for keeping both
+    feet down and worked against turning on the spot. Stepping in phase must now earn more than standing."""
+    task = VelocityTask(humanoid, VelTaskConfig(obs_noise=0.0))
+    qpos = np.tile(task.init_qpos, (2, 1))
+    qvel = np.zeros((2, task.nv))
+    zero = np.zeros((2, task.act_dim))
+    rewards = []
+    for contact in ([True, True], [True, False]):   # both feet down vs. the clock's pattern (left stance)
+        ts = task.make_state(2)
+        ts.commands[:] = [0.0, 0.0, 0.5]
+        ts.t[:] = 0.1 * task.cfg.gait_period             # phase 0.1: left in stance, right swinging
+        _, terms, _ = task.reward(qpos, qvel, zero, task.action_to_ctrl(zero), np.array([contact] * 2), ts)
+        rewards.append(terms["contact_phase"][0])
+    assert rewards[1] > rewards[0]
+
+
+def test_normaliser_std_floor_keeps_unseen_command_bounded():
+    """(c) A student distilled on zero commands had std ~ eps on the command inputs, so any real command was
+    normalised to +-clip (10 sigma). The std floor bounds it, and it survives saving."""
+    from simulatics.train.nn import load_npz, save_npz
+    x = np.zeros((500, 3))
+    x[:, 0] = np.random.default_rng(0).normal(0, 1, 500)
+    plain, floored = RunningMeanStd(3), RunningMeanStd(3, std_floor=[0.0, 0.5, 0.5])
+    for r in (plain, floored):
+        r.update(x)
+        r.update(np.full((1, 3), np.nan))                 # a NaN row is ignored, not averaged in
+    probe = np.array([[0.0, 0.4, 0.4]])
+    assert plain.normalize(probe)[0, 1] == pytest.approx(10.0)  # the old failure mode
+    assert abs(floored.normalize(probe)[0, 1]) < 1.0 and np.isfinite(floored.mean).all()
+    back = RunningMeanStd.from_arrays(floored.to_arrays("obs_"), "obs_")
+    assert np.allclose(back.normalize(probe), floored.normalize(probe))
+
+
+def test_ppo_fine_tunes_a_student_with_other_hidden_sizes_and_task(tmp_path, humanoid):
+    """(b) A distilled student ([16] hidden, "steps" clock, frame history) loaded by a PPOTrainer configured
+    like the GUI (default actor_hidden and VelTaskConfig()): the student's architecture and task are adopted,
+    and its rl_checkpoint.npz is what the GUI's "continue from loaded" picks up."""
+    tcfg = _steps_cfg()
+    pol, _ = distill(humanoid, lambda m: StandingTeacher(m, tcfg), tcfg,
+                     DistillConfig(num_envs=2, rounds=1, episode_seconds=0.3, epochs=1, hidden=[16]),
+                     run_dir=tmp_path / "student")
+    assert (tmp_path / "student" / "rl_checkpoint.npz").exists()
+    cfg = PPOConfig(num_envs=4, steps_per_env=4, iterations=1, threads=1, blas_threads=1, name="ft",
+                    critic_hidden=[16], bc_coef=1.0, critic_warmup_iters=1)
+    tr = PPOTrainer(cfg, HumanoidParams(), VelTaskConfig(), runs_dir=tmp_path,
+                    init_checkpoint=tmp_path / "student" / "rl_checkpoint.npz")
+    tr.run()
+    out = RLPolicy.load(tmp_path / "ft" / "rl_policy.npz")
+    assert out.actor.mu.sizes == pol.actor.mu.sizes and out.task_config().clock == "steps"
+    assert np.allclose(out.actor.mu.params[0], pol.actor.mu.params[0])  # warm-up: the actor did not move
+    RLController(humanoid, out)
+
+
+def test_rl_controller_guards_against_nan(humanoid):
+    """(d) A NaN action (or state) must never reach the servos."""
+    pol = _tiny_rl_policy(humanoid)
+    ctrl = RLController(humanoid, pol)
+    data = mujoco.MjData(humanoid)
+    mujoco.mj_forward(humanoid, data)
+    ctrl.reset(humanoid, data)
+    ctrl.step(humanoid, data)
+    good = data.ctrl.copy()
+    pol.actor.mu.params[0][:] = np.nan
+    for _ in range(3):
+        ctrl.step(humanoid, data)
+        mujoco.mj_step(humanoid, data, 4)
+    assert np.isfinite(data.ctrl).all() and np.allclose(data.ctrl, good) and ctrl.nan_steps == 3
+    assert "not finite" in ctrl.status()["message"]
+    data.qpos[2] = np.nan
+    ctrl.step(humanoid, data)
+    assert ctrl.status()["mode"] == "fallen" and np.isfinite(data.ctrl).all()
+
+
+def test_tiny_ppo_config_gives_finite_history(tmp_path):
+    """(e) Fewer samples than minibatches used to give empty minibatches and NaN losses / KL in the history,
+    which is invalid JSON for the GUI."""
+    cfg = PPOConfig(num_envs=1, steps_per_env=2, num_minibatches=4, iterations=2, threads=1, blas_threads=1,
+                    name="tiny", actor_hidden=[8], critic_hidden=[8])
+    tr = PPOTrainer(cfg, HumanoidParams(), VelTaskConfig(), runs_dir=tmp_path)
+    tr.run()
+    json.dumps(tr.status(), allow_nan=False)
+    assert all(np.isfinite(v) for row in tr.history for v in row.values() if isinstance(v, float))
+
+
+def test_step_clock_schedule_start_and_plan_command(humanoid):
+    task = VelocityTask(humanoid, _steps_cfg(obs_noise=0.0))
+    ts = task.make_state(1)
+    dt = task.timestep
+    task.update_clock(ts)
+    assert ts.walk_t[0] < 0 and not task.clock_features(ts).any()        # stands until commanded
+    ts.commands[0] = [0.2, 0.0, 0.0]
+    task.update_clock(ts)
+    assert ts.walk_t[0] == 0.0
+    c = task.step_clock(np.array([0.0, 119 * dt, 120 * dt, (120 + 96) * dt, (120 + 97) * dt,
+                                  (120 + 97 + 27) * dt, (120 + 2 * 124) * dt]))
+    assert c["in_swing"].tolist() == [[False, False], [False, False], [True, False], [True, False],
+                                      [False, False], [False, True], [True, False]]
+    assert c["start"][1] < 1.0 and c["start"][2] == 1.0
+    # the plan command follows the live command until lift-off and is held during the swing
+    ts.walk_t[0] = 121 * dt
+    ts.commands[0] = [0.4, 0.0, 0.3]
+    task.update_clock(ts)
+    assert np.allclose(ts.plan_cmd[0], [0.2, 0.0, 0.0])
+    ts.walk_t[0] = (120 + 97) * dt
+    task.update_clock(ts)
+    assert np.allclose(ts.plan_cmd[0], [0.4, 0.0, 0.3])
+    obs, _ = task.observe(task.init_qpos[None], np.zeros((1, task.nv)), ts)
+    assert obs.shape == (1, task.obs_dim) and task.proprio_dim == 9 + 3 * task.act_dim + 9
+
+
+def test_mirror_maps_match_the_physically_mirrored_robot(humanoid):
+    """mirror_obs(obs(s)) == obs(mirror(s)) for a random state s and its reflection in the robot's sagittal
+    plane, with the step clock half a cycle on; and the mirrored joint angles put the left foot where the
+    reflected right foot was (so the joint sign conventions hold for this model)."""
+    task = VelocityTask(humanoid, _steps_cfg(obs_noise=0.0, history=0, obs_lin_vel=True))
+    rng = np.random.default_rng(3)
+    qpos = task.init_qpos.copy()
+    qpos[task.qadr] += rng.uniform(-0.15, 0.15, task.act_dim)
+    rpy = rng.uniform(-0.2, 0.2, 3)
+    quat = np.zeros(4)
+    mujoco.mju_euler2Quat(quat, rpy, "xyz")
+    qpos[3:7] = quat
+    qvel = rng.normal(0, 0.5, task.nv)
+    _, _, aperm, asign = task.mirror_maps()
+    mq, mv = qpos.copy(), qvel.copy()
+    mq[1] = -qpos[1]
+    mq[3:7] = [quat[0], -quat[1], quat[2], -quat[3]]
+    mq[task.qadr] = (qpos[task.qadr][aperm] - task.q_default[aperm]) * asign + task.q_default
+    mv[0:6] = qvel[0:6] * [1, -1, 1, -1, 1, -1]
+    mv[task.dadr] = qvel[task.dadr][aperm] * asign
+    half = task.clk_ss + task.clk_ds
+    obs = []
+    for q, v, cmd, act, walk in ((qpos, qvel, [0.3, 0.1, 0.4], np.arange(task.act_dim) * 0.1, 0.9),
+                                 (mq, mv, [0.3, -0.1, -0.4], task.mirror_actions(np.arange(task.act_dim) * 0.1),
+                                  0.9 + half * task.timestep)):
+        ts = task.make_state(1)
+        ts.commands[0], ts.last_action[0], ts.walk_t[0] = cmd, act, walk
+        task.update_clock(ts)
+        obs.append(task.observe(q[None], v[None], ts)[0][0])
+    assert np.allclose(task.mirror_obs(obs[0]), obs[1], atol=1e-9)
+    assert np.allclose(task.mirror_obs(task.mirror_obs(obs[0])), obs[0])
+    d1, d2 = mujoco.MjData(humanoid), mujoco.MjData(humanoid)
+    d1.qpos[:], d2.qpos[:] = qpos, mq
+    mujoco.mj_kinematics(humanoid, d1)
+    mujoco.mj_kinematics(humanoid, d2)
+    for a, b in (("left_foot", "right_foot"), ("right_foot", "left_foot")):
+        assert np.allclose(d2.xpos[humanoid.body(a).id], d1.xpos[humanoid.body(b).id] * [1, -1, 1], atol=1e-9)
+
+
+def test_walker_step_clock_matches_the_teacher(humanoid):
+    """The student's "steps" clock must follow the footstep walker's own step schedule (measured from its
+    status), including after resets and command changes, or the distilled student learns a shifted gait."""
+    from dataclasses import asdict
+    from simulatics.train.ppo import _DistillEnvs, walker_task_config, walker_teacher_factory
+    factory = walker_teacher_factory()
+    if factory is None:
+        pytest.skip("control/walker.py not available")
+    try:
+        factory(humanoid)
+    except Exception as e:  # the walker's own health is tests/test_walker.py's job
+        pytest.skip(f"WalkController cannot be built right now: {type(e).__name__}: {e}")
+    tcfg = walker_task_config(humanoid, factory, episode_seconds=2.5)
+    assert tcfg.clock == "steps" and tcfg.decimation == 2 and len(tcfg.init_qpos) == humanoid.nq
+    envs = _DistillEnvs(humanoid, factory, tcfg.to_dict(), asdict(DistillConfig(commands="goals", goal_prob=0.5)),
+                        2, 0, 1)
+    res = envs.run(None, 1.0, 4.0)
+    assert res["clock_checks"] > 0 and res["clock_mismatch"] == 0 and res["falls"] == 0
+    assert res["obs"].shape[1] == VelocityTask(humanoid, tcfg).obs_dim and np.isfinite(res["act"]).all()
+
+
+def test_rl_controller_holds_position_while_stepping_in_place(humanoid):
+    """A "steps"-clock policy keeps stepping at a zero command; after a stop the controller holds the spot with
+    small commands (hysteresis), never starts the gait by itself, and a velocity command cancels the hold."""
+    ctrl = RLController(humanoid, _tiny_rl_policy(humanoid, _steps_cfg()))
+    ctrl.set_path(None)
+    assert np.allclose(ctrl._hold_command(1.0, 2.0, 0.0), 0.0) and np.allclose(ctrl._hold, [1.0, 2.0])
+    assert np.allclose(ctrl._hold_command(1.5, 2.0, 0.0), 0.0)          # standing: the hold never starts a gait
+    ctrl.ts.walk_t[0] = 3.0                                                # stepping
+    assert np.allclose(ctrl._hold_command(1.05, 2.0, 0.0), 0.0)          # 5 cm: inside the dead band
+    cmd = ctrl._hold_command(1.5, 2.0, np.pi / 2)                         # 0.5 m east of the spot, facing north
+    assert cmd[1] > 0.1 and abs(cmd[0]) < 1e-9 and np.hypot(*cmd[:2]) <= ctrl.hold_speed + 1e-9  # west = robot's left
+    assert np.hypot(*ctrl._hold_command(1.06, 2.0, 0.0)[:2]) > 0          # keeps correcting down to hold_stop
+    assert np.allclose(ctrl._hold_command(1.02, 2.0, 0.0), 0.0)
+    ctrl.set_velocity(0.0, 0.0, 0.0)
+    assert ctrl._hold is None
+
+
+def test_rl_controller_puts_the_robot_in_the_trained_stance(humanoid):
+    q0 = VelocityTask(humanoid).init_qpos.copy()
+    q0[[humanoid.joint(n).qposadr[0] for n in ("left_knee", "right_knee")]] = 0.6
+    pol = _tiny_rl_policy(humanoid, _steps_cfg(init_qpos=q0.tolist()))
+    ctrl = RLController(humanoid, pol)
+    data = mujoco.MjData(humanoid)
+    data.qpos[0:2] = (1.0, -2.0)
+    data.qpos[3:7] = (np.cos(0.5), 0, 0, np.sin(0.5))                      # yaw 1 rad
+    mujoco.mj_forward(humanoid, data)
+    ctrl.reset(humanoid, data)
+    assert np.allclose(data.qpos[ctrl.task.qadr], ctrl.task.q_default) and np.allclose(data.qpos[:2], (1.0, -2.0))
+    assert data.qpos[ctrl.task.qadr[5]] > 0.5 and abs(base_pose(data)[2] - 1.0) < 1e-6
+    ctrl.set_path(None)
+    ctrl.step(humanoid, data)
+    assert ctrl.status()["gait"] == "standing"
+    ctrl.set_velocity(0.2)
+    ctrl.step(humanoid, data)
+    assert ctrl.status()["gait"] == "stepping"
 
 
 # ---- opt-in: real PPO smoke run on the humanoid -----------------------------------------------------------

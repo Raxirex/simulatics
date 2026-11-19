@@ -27,7 +27,7 @@ RUNS = Path("runs")
 # GUI field defaults per training method (the Train tab swaps them in when the method changes)
 TRAIN_PRESETS = {
     "ppo": {"population": 256, "generations": 1500, "lr": 0.001, "threads": 8, "episode_seconds": 20},
-    "distill": {"population": 64, "generations": 8, "lr": 0.001, "threads": 4, "episode_seconds": 10},
+    "distill": {"population": 16, "generations": 14, "lr": 0.001, "threads": 5, "episode_seconds": 25},
     "imitation": {"population": 64, "generations": 1500, "lr": 0.001, "threads": 4, "episode_seconds": 10},
     "es": {"population": 256, "generations": 200, "lr": 0.005, "sigma": 0.01, "threads": 0, "episode_seconds": 8},
     "ga": {"population": 256, "generations": 200, "lr": 0.005, "sigma": 0.01, "threads": 0, "episode_seconds": 8},
@@ -48,9 +48,10 @@ def _finite(v):
 class _DistillJob:
     """Background distillation (model-based walker -> neural policy) with the Trainer status shape."""
 
-    def __init__(self, model_xml: str, params, name: str, rounds: int, envs: int):
+    def __init__(self, model_xml: str, params, name: str, rounds: int, envs: int, workers: int = 5,
+                 seconds: float = 25.0):
         import threading
-        self.name, self.rounds, self.envs = name, rounds, envs
+        self.name, self.rounds, self.envs, self.workers, self.seconds = name, rounds, envs, workers, seconds
         self.model_xml, self.params = model_xml, params
         self.state, self.error, self.history = "idle", "", []
         self.policy_path = RUNS / name / "rl_policy.npz"
@@ -67,11 +68,15 @@ class _DistillJob:
         try:
             import mujoco
             from ..train.ppo import DistillConfig, distill, walker_teacher_factory
-            factory = walker_teacher_factory()
+            # the recipe that produced runs/rl_walker (40/40 goals): fixed-timing walker able to reach 0.4 m/s
+            factory = walker_teacher_factory(step_forward=0.32)
             if factory is None:
                 raise RuntimeError("the model-based walker is not available for this robot")
             model = mujoco.MjModel.from_xml_string(self.model_xml)
-            cfg = DistillConfig(rounds=self.rounds, num_envs=self.envs, name=self.name)
+            cfg = DistillConfig(rounds=self.rounds, num_envs=self.envs, workers=self.workers,
+                                episode_seconds=self.seconds, grad_steps=3000, batch_size=1024,
+                                hidden=[512, 256, 128], lr=1e-3, lr_final=1e-4, keep_every=3,
+                                buffer_size=450_000, beta_decay=0.5, name=self.name)
 
             def cb(row):
                 # lower is better for imitation error, so chart its negative as the "score"
@@ -376,8 +381,9 @@ def create_app() -> FastAPI:
             tr = guard(ImitationTrainer, cfg, str(mpath) if mpath.exists() else motion, base=sess.params,
                        runs_dir=RUNS)
         elif algo == "distill":
-            tr = _DistillJob(sess.export_xml(), sess.params, name, int(np.clip(d.get("generations", 8), 1, 50)),
-                             int(np.clip(d.get("population", 8), 1, 64)))
+            tr = _DistillJob(sess.export_xml(), sess.params, name, int(np.clip(d.get("generations", 14), 1, 50)),
+                             int(np.clip(d.get("population", 16), 1, 64)), int(np.clip(d.get("threads") or 5, 1, 16)),
+                             float(np.clip(d.get("episode_seconds", 25), 2, 120)))
         elif algo in ("es", "ga"):
             cfg = TrainConfig.from_dict(d)
             cfg.name = name

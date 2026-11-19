@@ -12,5 +12,10 @@ runs/imitate_walk/*
 !runs/imitate_walk/imitation_policy.npz
 !runs/imitate_walk/evaluation.json
 !runs/imitate_walk/config.json
+!runs/rl_walker/
+runs/rl_walker/*
+!runs/rl_walker/rl_policy.npz
+!runs/rl_walker/eval.json
+!runs/rl_walker/*.py
 MUJOCO_LOG.TXT
 .claude/

@@ -83,6 +83,24 @@ def test_motion_preview_and_trained_imitation_policy_play(sess):
     assert sess.falls == 0 and moved > 0.5   # it walks the reference clip without falling
 
 
+def test_learned_walker_policy_reaches_a_goal(sess):
+    import pathlib
+    policy = pathlib.Path("runs/rl_walker/rl_policy.npz")
+    if not policy.exists():
+        pytest.skip("trained walking policy not present")
+    sess.load_policy(str(policy.resolve()))
+    assert sess.controller.name == "rl"
+    with sess.lock:
+        sess.nav.set_goal([2.0, 1.0])
+        sess.running = True
+    assert wait_for(lambda: sess.nav.state in ("reached", "failed", "fallen"), timeout=90), sess.nav.to_dict()
+    assert sess.nav.state == "reached", sess.nav.to_dict()
+    with sess.lock:
+        x, y, _ = base_pose(sess.data)
+    assert np.hypot(x - 2.0, y - 1.0) < 0.15
+    assert sess.falls == 0
+
+
 def test_mpc_controller_choice_walks_to_a_goal(sess):
     sess.set_controller("mpc")
     assert sess.controller.name == "mpc"

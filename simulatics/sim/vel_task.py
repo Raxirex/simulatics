@@ -7,7 +7,10 @@ arXiv 2109.11978) defines the task most learned locomotion controllers in the li
   zero commands so the policy also learns to stand still (20 % is a common choice).
 * **Observation** (proprioceptive only, deployable on hardware): base angular velocity, projected gravity,
   command, joint positions minus the default pose, joint velocities, last action, and the sin/cos of a
-  gait clock (common for humanoids). Optionally a history of past frames.
+  gait clock (common for humanoids). Optionally a history of past frames. A student
+  distilled from the footstep walker (train/ppo.py) instead observes the walker's own step schedule
+  (clock="steps": stand until commanded, first weight shift, then alternating single / double support)
+  and the command its current step was planned with, and starts from the walker's stance (init_qpos).
 * **Privileged critic observation** (asymmetric actor-critic, Pinto et al. 2018): adds the true base
   linear velocity, base height, foot contacts and the domain-randomisation parameters of the episode.
 * **Action**: joint-target offsets, q_target = q_default + action_scale * a, for the leg and abdomen
@@ -15,7 +18,8 @@ arXiv 2109.11978) defines the task most learned locomotion controllers in the li
 * **Reward**: exponential tracking kernels exp(-|c - v|^2 / sigma) for linear xy velocity and yaw rate,
   and small penalties (z velocity, roll/pitch rate, orientation, base height, torques, joint
   acceleration, action rate, joint limits, hip roll/yaw), the feet-air-time bonus, a
-  contact-phase term, a stand-still term for zero commands and a termination penalty. As in Rudin et al. 2021,
+  contact-phase term (active for any translation *or* yaw-rate command, so turning in place is stepping),
+  a stand-still term for zero commands and a termination penalty. As in Rudin et al. 2021,
   every weight is multiplied by the control dt, and the sum (without termination) can be clipped at zero
   (`only_positive_rewards`) so an early policy is not taught to fall on purpose.
 * **Domain randomisation**: floor/foot friction scale, added torso mass and servo stiffness are drawn
@@ -81,10 +85,33 @@ class VelTaskConfig:
     cmd_wz: tuple[float, float] = (-0.8, 0.8)
     resample_seconds: float = 8.0
     zero_cmd_prob: float = 0.2
+    turn_prob: float = 0.0              # share of commands that only turn (vx = vy = 0)
     small_cmd: float = 0.1              # |v_xy| below this -> 0 (Rudin et al. 2021)
+    # limits of the path follower that drives the policy to clicked goals (RLController); 0 = the command
+    # range. Lower than the command range keeps goal walking away from the fast-and-turning corner.
+    follow_speed: float = 0.0
+    follow_turn: float = 0.0
+    # Standing pose: full qpos (root + every joint) of the start pose; overrides knee_bend / lean / the
+    # keyframe. Distillation from a footstep walker stores the walker's knees-bent stance here, so the
+    # student's default pose (action 0) is the teacher's stance and RLController.reset starts there too.
+    init_qpos: list | None = None
     # observation
     gait_period: float = 0.8            # s; 0 disables the clock input and the contact-phase reward
+    # Gait clock. "sin": sin/cos of a free-running clock of period gait_period (common for humanoids).
+    # "steps": the step schedule of a footstep walker (control/walker.py): stand until the first non-zero
+    # command, a first weight shift of clock_start_s, then single support of clock_ss_s (left foot first)
+    # alternating with double support of clock_ds_s, for as long as the episode lasts (a zero command then
+    # means stepping in place). Observed as 6 clock features plus the command the current step was planned
+    # with (latched at lift-off, like the walker's footstep plan). See VelocityTask.step_clock.
+    clock: str = "sin"
+    clock_start_s: float = 0.0
+    clock_ss_s: float = 0.0
+    clock_ds_s: float = 0.0
     history: int = 0                    # number of past proprioceptive frames appended to the actor obs
+    # Base linear velocity (body frame, x2.0) as an actor input, appended at the end of each frame. the reference
+    # default actor sees it; a student of a balance controller that feeds back the centre-of-mass velocity
+    # needs it (sim-only: on hardware it would come from a state estimator).
+    obs_lin_vel: bool = False
     obs_noise: float = 1.0              # multiplier on the reference noise scales (0 = no noise)
     asymmetric_critic: bool = True
     # reward
@@ -120,6 +147,8 @@ class VelTaskConfig:
         for k in ("cmd_vx", "cmd_vy", "cmd_wz", "friction_range", "added_mass_range", "kp_scale_range"):
             setattr(c, k, tuple(float(x) for x in getattr(c, k)))
         c.rewards = {**DEFAULT_REWARDS, **{k: float(v) for k, v in (c.rewards or {}).items()}}
+        if c.init_qpos is not None:
+            c.init_qpos = [float(x) for x in c.init_qpos]
         return c
 
 
@@ -136,6 +165,8 @@ class VelTaskState:
     push_timer: np.ndarray      # (N,)
     variant: np.ndarray         # (N,) int, index of the model variant (domain randomisation)
     history: np.ndarray         # (N, H, P) past proprioceptive frames (H may be 0)
+    walk_t: np.ndarray | None = None    # (N,) "steps" clock: seconds since walking started, -1 while standing
+    plan_cmd: np.ndarray | None = None  # (N, 3) "steps" clock: command the current step was planned with
 
 
 def quat_to_mat(q: np.ndarray) -> np.ndarray:
@@ -249,18 +280,31 @@ class VelocityTask:
             elif bend and n.endswith("ankle_y"):
                 default[i] = -bend / 2
         d = mujoco.MjData(model)
-        if model.nkey > 0:  # an imported robot's first keyframe defines its standing pose
-            mujoco.mj_resetDataKeyframe(model, d, 0)
-            if not bend:
-                default = d.qpos[self.qadr_all].copy()
-        else:
+        if cfg.init_qpos is not None:  # an explicit standing pose (e.g. a teacher's stance): used as is
+            # It covers the robot (root first, then its joints). A scene may append more joints after the
+            # robot (free props on a table): those keep their qpos0, so a policy loads in any scene.
+            q0 = np.asarray(cfg.init_qpos, float).ravel()
+            if not (7 <= q0.size <= model.nq) or not np.isfinite(q0).all() or self.qadr_all.max() >= q0.size:
+                raise ValueError(f"init_qpos ({q0.size} values) does not cover this robot's root and joints "
+                                 f"(model nq {model.nq})")
             mujoco.mj_resetData(model, d)
-        # forward lean: the whole body pitches forward about the ankles (ankle pitch -lean, root +lean)
-        ankle_pitch = np.array([n.endswith("ankle_y") or "ankle_pitch" in n for n in jnames])
-        lean = float(cfg.lean) if ankle_pitch.any() else 0.0
-        default[ankle_pitch] -= lean
-        if lean:
-            d.qpos[3:7] = _quat_mul(np.array([[np.cos(lean / 2), 0.0, np.sin(lean / 2), 0.0]]), d.qpos[None, 3:7])[0]
+            d.qpos[:q0.size] = q0
+            d.qpos[3:7] /= np.linalg.norm(d.qpos[3:7])
+            default = d.qpos[self.qadr_all].copy()
+        else:
+            if model.nkey > 0:  # an imported robot's first keyframe defines its standing pose
+                mujoco.mj_resetDataKeyframe(model, d, 0)
+                if not bend:
+                    default = d.qpos[self.qadr_all].copy()
+            else:
+                mujoco.mj_resetData(model, d)
+            # forward lean: the whole body pitches forward about the ankles (ankle pitch -lean, root +lean)
+            ankle_pitch = np.array([n.endswith("ankle_y") or "ankle_pitch" in n for n in jnames])
+            lean = float(cfg.lean) if ankle_pitch.any() else 0.0
+            default[ankle_pitch] -= lean
+            if lean:
+                d.qpos[3:7] = _quat_mul(np.array([[np.cos(lean / 2), 0.0, np.sin(lean / 2), 0.0]]),
+                                        d.qpos[None, 3:7])[0]
         default = np.clip(default, lo, hi)
         self.ctrl_default = default
         self.q_default = default[self.ctrl_idx]
@@ -285,15 +329,29 @@ class VelocityTask:
 
         # ---- observation layout --------------------------------------------------------------
         a = self.act_dim
-        self.clock = cfg.gait_period > 0
-        self.proprio_dim = 3 + 3 + 3 + 3 * a + (2 if self.clock else 0)
+        if cfg.clock not in ("sin", "steps"):
+            raise ValueError(f"unknown clock {cfg.clock!r} (use 'sin' or 'steps')")
+        self.step_clock_on = cfg.clock == "steps"
+        if self.step_clock_on and min(cfg.clock_ss_s, cfg.clock_ds_s) <= 0:
+            raise ValueError("the 'steps' clock needs clock_ss_s > 0 and clock_ds_s > 0")
+        self.clock = self.step_clock_on or cfg.gait_period > 0
+        self.clock_dim = 9 if self.step_clock_on else (2 if self.clock else 0)
+        self.lin_dim = 3 if cfg.obs_lin_vel else 0
+        self.proprio_dim = 3 + 3 + 3 + 3 * a + self.clock_dim + self.lin_dim
         self.obs_dim = self.proprio_dim * (1 + cfg.history)
         self.critic_obs_dim = (self.proprio_dim + 3 + 1 + 2 + 3) if cfg.asymmetric_critic else self.obs_dim
         # Reference scales: lin_vel 2.0, ang_vel 0.25, dof_pos 1.0, dof_vel 0.05; commands scaled alike
         self.cmd_scale = np.array([2.0, 2.0, 0.25])
         noise = np.concatenate([np.full(3, 0.2 * 0.25), np.full(3, 0.05), np.zeros(3), np.full(a, 0.01),
-                                np.full(a, 1.5 * 0.05), np.zeros(a), np.zeros(2 if self.clock else 0)])
+                                np.full(a, 1.5 * 0.05), np.zeros(a), np.zeros(self.clock_dim),
+                                np.full(self.lin_dim, 0.1 * 2.0)])
         self.noise_scale = noise * cfg.obs_noise
+        # "steps" clock in physics ticks (integers, so accumulated float time cannot shift a phase edge)
+        self.timestep = float(model.opt.timestep)
+        tick = lambda s: max(1, int(round(s / self.timestep)))  # noqa: E731
+        self.clk_start = int(round(cfg.clock_start_s / self.timestep))
+        self.clk_ss, self.clk_ds = tick(cfg.clock_ss_s or 1.0), tick(cfg.clock_ds_s or 1.0)
+        self._mirror = None
 
     # ---- buffers ------------------------------------------------------------------------------------
     def make_state(self, n: int) -> VelTaskState:
@@ -302,7 +360,8 @@ class VelocityTask:
             commands=np.zeros((n, 3)), last_action=np.zeros((n, a)), last_dqd=np.zeros((n, a)),
             feet_air_time=np.zeros((n, 2)), last_contact=np.zeros((n, 2), bool), t=np.zeros(n),
             cmd_timer=np.zeros(n), push_timer=np.zeros(n), variant=np.zeros(n, int),
-            history=np.zeros((n, self.cfg.history, self.proprio_dim)))
+            history=np.zeros((n, self.cfg.history, self.proprio_dim)),
+            walk_t=np.full(n, -1.0), plan_cmd=np.zeros((n, 3)))
 
     def reset_envs(self, states: np.ndarray, ts: VelTaskState, idx: np.ndarray, rng: np.random.Generator,
                    n_variants: int = 1) -> None:
@@ -321,8 +380,9 @@ class VelocityTask:
         qvel[:, 0:2] += rng.uniform(-cfg.init_vel_noise, cfg.init_vel_noise, (n, 2))
         qvel[:, 3:6] += rng.uniform(-cfg.init_vel_noise, cfg.init_vel_noise, (n, 3))
         states[idx] = s
-        for buf in (ts.last_action, ts.last_dqd, ts.feet_air_time, ts.t, ts.history):
+        for buf in (ts.last_action, ts.last_dqd, ts.feet_air_time, ts.t, ts.history, ts.plan_cmd):
             buf[idx] = 0
+        ts.walk_t[idx] = -1.0
         ts.last_contact[idx] = False
         ts.variant[idx] = rng.integers(0, max(1, n_variants), n)
         ts.push_timer[idx] = rng.uniform(0.5, 1.0, n) * cfg.push_interval_s
@@ -331,6 +391,7 @@ class VelocityTask:
     def sample_commands(self, ts: VelTaskState, idx: np.ndarray, rng: np.random.Generator) -> None:
         cfg, n = self.cfg, len(idx)
         c = np.stack([rng.uniform(*cfg.cmd_vx, n), rng.uniform(*cfg.cmd_vy, n), rng.uniform(*cfg.cmd_wz, n)], axis=1)
+        c[rng.random(n) < cfg.turn_prob, :2] = 0.0          # turning on the spot
         c[np.linalg.norm(c[:, :2], axis=1) < cfg.small_cmd, :2] = 0.0
         c[rng.random(n) < cfg.zero_cmd_prob] = 0.0
         ts.commands[idx] = c
@@ -363,7 +424,60 @@ class VelocityTask:
         return rot, lin, ang, grav
 
     def phase(self, ts: VelTaskState) -> np.ndarray:
+        if self.step_clock_on:
+            return self.step_clock(ts.walk_t)["phase"]
         return (ts.t / self.cfg.gait_period) % 1.0 if self.clock else np.zeros_like(ts.t)
+
+    # ---- "steps" gait clock -----------------------------------------------------------------------------
+    def step_clock(self, walk_t: np.ndarray) -> dict:
+        """The walker's step schedule at `walk_t` seconds after walking started (< 0: standing).
+
+        Ticks k = round(walk_t / timestep); the first weight shift lasts clk_start ticks, then a cycle of
+        [left swing clk_ss][double support clk_ds][right swing clk_ss][double support clk_ds] repeats.
+        Returns walking (N,) bool, start (N,) progress of the first weight shift in [0, 1], phase (N,) in
+        [0, 1) over the two-step cycle (continuous through the weight shift), swing (N, 2) progress of the
+        left / right swing in [0, 1), in_swing (N, 2) bool and swing_tick (N,) ticks since lift-off (-1 when
+        no foot swings)."""
+        walk_t = np.asarray(walk_t, float)
+        walking = walk_t >= 0
+        k = np.rint(np.maximum(walk_t, 0.0) / self.timestep).astype(np.int64)
+        ss, ds, k0 = self.clk_ss, self.clk_ds, self.clk_start
+        cyc = 2 * (ss + ds)
+        u = k - k0
+        w = np.mod(u, cyc)
+        cycling = walking & (u >= 0)
+        in_l = cycling & (w < ss)
+        in_r = cycling & (w >= ss + ds) & (w < 2 * ss + ds)
+        swing = np.stack([np.where(in_l, w / ss, 0.0), np.where(in_r, (w - ss - ds) / ss, 0.0)], axis=1)
+        tick = np.where(in_l, w, np.where(in_r, w - ss - ds, -1))
+        start = np.where(walking, np.clip(k / max(k0, 1), 0.0, 1.0), 0.0)
+        return {"walking": walking, "start": start, "phase": np.mod(u / cyc, 1.0), "swing": swing,
+                "in_swing": np.stack([in_l, in_r], axis=1), "swing_tick": tick}
+
+    def update_clock(self, ts: VelTaskState) -> None:
+        """Before observing: start the "steps" clock at the first non-zero command and latch the command the
+        current step is planned with (the live command until lift-off, then held during the swing). A no-op
+        for the "sin" clock."""
+        if not self.step_clock_on:
+            return
+        start = (ts.walk_t < 0) & np.any(np.abs(ts.commands) > 1e-6, axis=1)
+        ts.walk_t[start] = 0.0
+        clk = self.step_clock(ts.walk_t)
+        replan = clk["swing_tick"] < 1        # the walker plans a step up to (and including) its lift-off tick
+        ts.plan_cmd[replan] = ts.commands[replan]
+
+    def clock_features(self, ts: VelTaskState) -> np.ndarray:
+        n = len(ts.t)
+        if self.step_clock_on:
+            c = self.step_clock(ts.walk_t)
+            wk = c["walking"].astype(float)
+            ph = 2 * np.pi * c["phase"]
+            return np.concatenate([np.stack([wk, c["start"], wk * np.sin(ph), wk * np.cos(ph)], axis=1),
+                                   c["swing"], ts.plan_cmd * self.cmd_scale], axis=1)
+        if self.clock:
+            ph = 2 * np.pi * self.phase(ts)
+            return np.stack([np.sin(ph), np.cos(ph)], axis=1)
+        return np.zeros((n, 0))
 
     # ---- observation ----------------------------------------------------------------------------------
     def observe(self, qpos: np.ndarray, qvel: np.ndarray, ts: VelTaskState, contact: np.ndarray | None = None,
@@ -380,8 +494,9 @@ class VelocityTask:
         dqd = qvel[:, self.dadr]
         parts = [ang * 0.25, grav, ts.commands * self.cmd_scale, dq, dqd * 0.05, ts.last_action]
         if self.clock:
-            ph = 2 * np.pi * self.phase(ts)
-            parts.append(np.stack([np.sin(ph), np.cos(ph)], axis=1))
+            parts.append(self.clock_features(ts))
+        if self.lin_dim:
+            parts.append(lin * 2.0)
         clean = np.concatenate(parts, axis=1)
         clean = np.where(np.isfinite(clean), clean, 0.0)
         frame = clean
@@ -421,8 +536,13 @@ class VelocityTask:
         dq = q - self.q_default
         dqd = qvel[:, self.dadr]
         cmd = ts.commands
-        moving = np.linalg.norm(cmd[:, :2], axis=1) > cfg.small_cmd
-        still = ~moving & (np.abs(cmd[:, 2]) < cfg.small_cmd)
+        # "moving" = asked to step: a translation OR a yaw-rate command (turning in place needs steps too; it used
+        # to count as standing, so the contact-phase term paid for keeping both feet down while turning)
+        if self.step_clock_on:
+            moving = ts.walk_t >= 0
+        else:
+            moving = (np.linalg.norm(cmd[:, :2], axis=1) > cfg.small_cmd) | (np.abs(cmd[:, 2]) > cfg.small_cmd)
+        still = ~moving
         z = qpos[:, 2]
         terminated = ((z < cfg.min_height_frac * self.z0) | (-grav[:, 2] < np.cos(np.deg2rad(cfg.max_tilt_deg)))
                       | ~np.isfinite(qpos).all(axis=1) | ~np.isfinite(qvel).all(axis=1))
@@ -456,7 +576,10 @@ class VelocityTask:
         first_contact = (ts.feet_air_time > 0) & contact_filt
         air = ts.feet_air_time + dt
         term("feet_air_time", lambda: np.sum((air - cfg.feet_air_time_target) * first_contact, axis=1) * moving)
-        if self.clock:
+        if self.step_clock_on:   # stance = the foot is not in its swing window (both feet while standing)
+            stance = ~self.step_clock(ts.walk_t)["in_swing"]
+            term("contact_phase", lambda: np.sum(contact == stance, axis=1).astype(float))
+        elif self.clock:
             ph = self.phase(ts)
             stance = np.stack([ph < 0.55, ((ph + 0.5) % 1.0) < 0.55], axis=1)
             term("contact_phase", lambda: np.where(moving, np.sum(contact == stance, axis=1),
@@ -481,10 +604,66 @@ class VelocityTask:
         ts.last_contact[:] = contact
         ts.last_action[:] = actions
         ts.last_dqd[:] = np.where(np.isfinite(dqd), dqd, 0.0)
-        ts.t += dt
+        self.advance_time(ts)
         ts.cmd_timer -= dt
         ts.push_timer -= dt
         return total, terms, terminated
+
+    def advance_time(self, ts: VelTaskState) -> None:
+        """One policy step of the episode clock and of the "steps" gait clock (when it runs)."""
+        ts.t += self.dt
+        ts.walk_t[:] = np.where(ts.walk_t >= 0, ts.walk_t + self.dt, ts.walk_t)
+
+    # ---- left/right mirror (symmetry augmentation / loss, Yu, Turk & Liu, SIGGRAPH 2018) ---------------
+    def mirror_maps(self):
+        """(obs permutation, obs signs, action permutation, action signs) of the left-right mirror about the
+        robot's sagittal (x-z) plane: swap left_/right_ joints, negate roll (x) and yaw (z) joints, negate
+        lateral velocity / yaw rate / roll rate / gravity y, shift the clock half a cycle (the other foot)."""
+        if self._mirror is not None:
+            return self._mirror
+        names = self.joint_names
+        aperm, asign = [], []
+        for n in names:
+            partner = ("right_" + n[5:]) if n.startswith("left_") else (
+                ("left_" + n[6:]) if n.startswith("right_") else n)
+            if partner not in names:
+                raise ValueError(f"no mirror partner for joint {n!r}")
+            aperm.append(names.index(partner))
+            short = n.split("_")[-1]
+            asign.append(-1.0 if short in ("x", "z", "roll", "yaw") else 1.0)
+        aperm, asign = np.array(aperm), np.array(asign)
+        a = self.act_dim
+        perm = [0, 1, 2, 3, 4, 5, 6, 7, 8]
+        sign = [-1, 1, -1, 1, -1, 1, 1, -1, -1]           # ang (x, y, z), grav (x, y, z), cmd (vx, vy, wz)
+        for off in (9, 9 + a, 9 + 2 * a):                    # dq, dqd, last action
+            perm += list(off + aperm)
+            sign += list(asign)
+        c0 = 9 + 3 * a
+        if self.step_clock_on:   # walking, start, sin, cos, swing L, swing R, plan cmd (vx, vy, wz)
+            perm += [c0, c0 + 1, c0 + 2, c0 + 3, c0 + 5, c0 + 4, c0 + 6, c0 + 7, c0 + 8]
+            sign += [1, 1, -1, -1, 1, 1, 1, -1, -1]
+        elif self.clock:         # half a cycle later: (sin, cos) -> (-sin, -cos)
+            perm += [c0, c0 + 1]
+            sign += [-1, -1]
+        if self.lin_dim:         # base linear velocity (vx, vy, vz) -> (vx, -vy, vz)
+            l0 = c0 + self.clock_dim
+            perm += [l0, l0 + 1, l0 + 2]
+            sign += [1, -1, 1]
+        p, s = np.array(perm), np.array(sign, float)
+        frames = 1 + self.cfg.history
+        P = self.proprio_dim
+        operm = np.concatenate([f * P + p for f in range(frames)])
+        osign = np.tile(s, frames)
+        self._mirror = (operm, osign, aperm, asign)
+        return self._mirror
+
+    def mirror_obs(self, obs: np.ndarray) -> np.ndarray:
+        operm, osign, _, _ = self.mirror_maps()
+        return obs[..., operm] * osign
+
+    def mirror_actions(self, actions: np.ndarray) -> np.ndarray:
+        _, _, aperm, asign = self.mirror_maps()
+        return actions[..., aperm] * asign
 
 
 def make_variants(model: mujoco.MjModel, cfg: VelTaskConfig, rng: np.random.Generator,

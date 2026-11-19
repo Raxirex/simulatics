@@ -87,6 +87,7 @@ class VecEnv:
 
     def _observe(self):
         qpos, qvel = self.task.split(self.state)
+        self.task.update_clock(self.ts)  # "steps" gait clock: starts at the first non-zero command (idempotent)
         return self.task.observe(qpos, qvel, self.ts, self.contact, self.props_norm[self.ts.variant], self.rng)
 
     def _models(self) -> list[mujoco.MjModel]:
