@@ -45,6 +45,10 @@ def _finite(v):
     return v
 
 
+class _StopDistill(Exception):
+    pass
+
+
 class _DistillJob:
     """Background distillation (model-based walker -> neural policy) with the Trainer status shape."""
 
@@ -55,6 +59,7 @@ class _DistillJob:
         self.model_xml, self.params = model_xml, params
         self.state, self.error, self.history = "idle", "", []
         self.policy_path = RUNS / name / "rl_policy.npz"
+        self._stop = threading.Event()
         self._thread = threading.Thread(target=self._run, daemon=True)
 
     def start(self):
@@ -62,7 +67,8 @@ class _DistillJob:
         self._thread.start()
 
     def stop(self):
-        pass  # rounds are short; a stop request lets the current run finish
+        # distill() has no stop hook: the per-round callback raises, so it stops after the current round
+        self._stop.set()
 
     def _run(self):
         try:
@@ -84,15 +90,20 @@ class _DistillJob:
                                      "mean": -(row.get("rollout_disagreement") or row["train_mse"]),
                                      "center": -row["train_mse"], "sps": None, "falls": row.get("falls"),
                                      "samples": row.get("samples")})
+                if self._stop.is_set():
+                    raise _StopDistill()
 
             distill(model, factory, cfg=cfg, run_dir=RUNS / self.name,
                     model_meta={"humanoid": self.params.to_dict(), "custom_model": False}, callback=cb)
             self.state = "finished"
+        except _StopDistill:
+            self.state = "stopped"
         except Exception as e:  # noqa: BLE001
             self.state, self.error = "error", f"{type(e).__name__}: {e}"
 
     def status(self):
-        return {"state": self.state, "error": self.error, "name": self.name, "algo": "distill", "kind": "distill",
+        state = "stopping after this round" if self._stop.is_set() and self.state == "running" else self.state
+        return {"state": state, "error": self.error, "name": self.name, "algo": "distill", "kind": "distill",
                 "generation": len(self.history), "generations": self.rounds, "best": None, "total_steps": 0,
                 "history": self.history, "policy": str(self.policy_path) if self.policy_path.exists() else None}
 
@@ -444,7 +455,10 @@ def create_app() -> FastAPI:
             if RUNS.resolve() not in p.parents or p.suffix != ".npz":
                 raise HTTPException(400, "policy must be a .npz inside the runs folder")
             policy = str(p)
-        msg = guard(sess.play_motion, d.get("motion"), mode, policy)
+        motion = d.get("motion")
+        if motion and (RUNS / "motions" / f"{motion}.npz").exists():
+            motion = str(RUNS / "motions" / f"{motion}.npz")  # an imported clip (library clips resolve by name)
+        msg = guard(sess.play_motion, motion, mode, policy)
         return {"message": msg, "controller": sess.controller.name}
 
     @app.post("/api/motions/import")

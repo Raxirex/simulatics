@@ -127,6 +127,8 @@ docs/ROS2.md               using the bridge with ROS 2
 - **Pushes.** A 100 N sideways push while walking is survived about half the time; forward/back 100 N
   recovery is no better than without the recovery planner. Push and terrain tests used the default body.
 - **Terrain** is rigid and static; the walker snapshots it when it is built. Stairs need treads of about 0.3 m.
+  Plan terrain courses on the ground-truth map: the lidar and SLAM maps treat anything above 15 cm (upper
+  stair steps) as an obstacle.
 - **Body range.** Accurate walking was verified for thigh/shin 0.28-0.55 m, pelvis 0.14-0.30 m, foot
   0.16-0.30 x 0.07-0.13 m, density 600-1300 kg/m3. The sliders allow more; very heavy or short-footed bodies
   can fall.
