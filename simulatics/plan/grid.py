@@ -32,13 +32,20 @@ class GridMap:
         return (np.asarray(cells, float) + 0.5) * self.res + self.origin
 
     # ---- ground truth ------------------------------------------------------
-    def rasterize_truth(self, model: mujoco.MjModel, data: mujoco.MjData, min_height: float = 0.1) -> None:
-        """Mark cells covered by static (world-body) geoms taller than min_height."""
+    def rasterize_truth(self, model: mujoco.MjModel, data: mujoco.MjData, min_height: float = 0.1,
+                        walkable: set[int] | None = None) -> None:
+        """Mark cells covered by static (world-body) geoms taller than min_height.
+
+        walkable: geom ids the robot can walk on whatever their height (stairs, ramps, terrain blocks).
+        """
         self.truth[:] = 0
+        walkable = walkable or set()
         centers = self.to_world(np.stack(np.meshgrid(np.arange(self.n), np.arange(self.n)), axis=-1))  # (h, w, 2)
         for g in range(model.ngeom):
             if model.geom_bodyid[g] != 0 or model.geom_type[g] in (mujoco.mjtGeom.mjGEOM_PLANE,
                                                                    mujoco.mjtGeom.mjGEOM_HFIELD):
+                continue
+            if g in walkable:
                 continue
             pos, r = data.geom_xpos[g], float(model.geom_rbound[g])
             if pos[2] + r < min_height:

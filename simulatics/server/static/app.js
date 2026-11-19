@@ -514,6 +514,23 @@ function wire(s) {
     if (!$('c-enabled').checked) $('cam').hidden = true; };
   ['c-enabled', 'c-name', 'c-depth'].forEach(id => $(id).addEventListener('change', sendCam));
 
+  // ROS 2 bridge
+  const showRos = (st) => {
+    const topics = Object.entries(st.topics || {}).filter(([, t]) => t.sent || t.received)
+      .map(([k, t]) => `${k.padEnd(28)} ${t.sent ? `out ${t.sent}` : `in ${t.received}`}${t.rate_hz ? `  ${fixed(t.rate_hz, 1)} Hz` : ''}`);
+    $('ros-status').textContent = `${st.state}${st.connected ? ' (connected)' : ''}${st.url ? '  ' + st.url : ''}` +
+      (st.error ? `\n${st.error}` : '') + (topics.length ? '\n' + topics.join('\n') : '') +
+      (st.rclpy_available === false && $('ros-mode').value === 'rclpy' ? '\nrclpy is not available in this Python' : '');
+  };
+  let rosTimer = null;
+  const pollRos = async () => { const st = await api('/api/ros/status'); showRos(st);
+    if (st.state === 'idle' || st.state === 'stopped') { clearInterval(rosTimer); rosTimer = null; } };
+  $('ros-connect').addEventListener('click', async () => {
+    showRos(await api('/api/ros/connect', { url: $('ros-url').value, mode: $('ros-mode').value }));
+    if (!rosTimer) rosTimer = setInterval(pollRos, 1000);
+  });
+  $('ros-disconnect').addEventListener('click', async () => showRos(await api('/api/ros/disconnect', {})));
+
   // walking
   $('ctrl-kind').addEventListener('change', async (e) => {
     const r = await api('/api/controller', { kind: e.target.value });

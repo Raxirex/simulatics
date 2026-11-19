@@ -113,6 +113,14 @@ def test_planner_goes_around_wall_and_reports_unreachable():
     assert len(grid.plan([0, 0], [3.0, 0.0])) == 0  # goal inside the obstacle
 
 
+def test_walkable_terrain_is_not_an_obstacle():
+    m, d = model(obstacles=OBST)
+    grid = GridMap()
+    grid.rasterize_truth(m, d, walkable={mujoco.mj_name2id(m, mujoco.mjtObj.mjOBJ_GEOM, "obj_0")})
+    assert grid.truth.sum() == 0
+    assert len(grid.plan([0, 0], [6, 0])) >= 2
+
+
 def test_planner_allows_a_close_final_approach():
     m, d = model(obstacles=OBST)          # wall face at x = 2.7
     grid = GridMap()

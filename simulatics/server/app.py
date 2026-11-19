@@ -94,7 +94,7 @@ class _DistillJob:
 def create_app() -> FastAPI:
     app = FastAPI(title="Simulatics")
     sess = SimSession()
-    state: dict = {"trainer": None, "cad": None, "cad_opts": None, "topo": None, "opt": None}
+    state: dict = {"trainer": None, "cad": None, "cad_opts": None, "topo": None, "opt": None, "ros": None}
 
     def guard(fn, *a, **k):
         try:
@@ -389,6 +389,38 @@ def create_app() -> FastAPI:
         sess.unload_policy()
         return {"ok": True}
 
+    # ---- ROS 2 bridge --------------------------------------------------------
+    def ros_status() -> dict:
+        from ..bridge import rclpy_available
+        b = state.get("ros")
+        st = b.status() if b is not None else {"state": "idle", "connected": False, "topics": {}}
+        st["rclpy_available"] = rclpy_available()
+        return _finite(st)
+
+    @app.post("/api/ros/connect")
+    def ros_connect(d: dict = Body(...)):
+        from ..bridge import start_bridge
+        old = state.get("ros")
+        if old is not None:
+            old.stop()  # always a fresh bridge per connect (a stopped one is not restarted)
+        url = str(d.get("url") or "ws://localhost:9090").strip()
+        if not url.startswith(("ws://", "wss://")):
+            raise HTTPException(400, "the rosbridge URL must start with ws:// or wss://")
+        state["ros"] = guard(start_bridge, sess, url, mode=str(d.get("mode", "rosbridge")))
+        return ros_status()
+
+    @app.post("/api/ros/disconnect")
+    def ros_disconnect():
+        b = state.get("ros")
+        if b is not None:
+            b.stop()  # sync endpoint: runs in the threadpool, not on the event loop
+            state["ros"] = None
+        return ros_status()
+
+    @app.get("/api/ros/status")
+    def ros_status_ep():
+        return ros_status()
+
     # ---- AI pilot ----------------------------------------------------------
     @app.post("/api/pilot/start")
     def pilot_start(d: dict = Body(...)):
@@ -591,6 +623,8 @@ def create_app() -> FastAPI:
     @app.on_event("shutdown")
     def _shutdown():
         sess.pilot.stop(timeout=1.0)
+        if state.get("ros") is not None:
+            state["ros"].stop()
         sess.shutdown()
         for k in ("trainer", "topo", "opt"):
             if state[k] is not None:

@@ -97,6 +97,14 @@
       <div class="info bad" id="c-error"></div>
       <h3>Body</h3>
       <div class="info" id="s-body"></div>
+      <h3>ROS 2 bridge</h3>
+      <p class="hint">Publishes /clock, /tf, /odom, /imu, /scan, /joint_states, camera, /map, /plan and /robot_description, and takes /cmd_vel, /goal_pose (RViz "2D Goal Pose") and arm commands. Start <code>rosbridge_server</code> on the ROS 2 side first (see docs/ROS2.md).</p>
+      <div class="row">
+        <label>rosbridge URL <input type="text" id="ros-url" value="ws://localhost:9090"></label>
+        <label>Mode <select id="ros-mode"><option value="rosbridge">rosbridge (websocket)</option><option value="rclpy">native rclpy</option></select></label>
+      </div>
+      <div class="row"><button id="ros-connect">Connect</button><button id="ros-disconnect">Disconnect</button></div>
+      <div class="info" id="ros-status">not connected</div>
     </section>
 
     <!-- ============================================================ WALK -->

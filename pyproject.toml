@@ -20,6 +20,7 @@ dependencies = [
     "trimesh>=4.0",         # meshes, mass properties, export
     "scikit-image>=0.22",   # marching cubes for topology-optimised parts
     "threadpoolctl>=3.1",   # BLAS thread limits during PPO
+    "websockets>=15",       # ROS 2 bridge (rosbridge v2 client) and live GUI stream
     "anthropic>=2.0",       # Claude pilot (only imported when a Claude mission runs)
 ]
 

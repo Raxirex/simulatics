@@ -108,7 +108,10 @@ class SimSession:
             self.arms = self._make_arms()
             self.controller = self._make_controller()
             self.reset()
-            self.grid.rasterize_truth(model, self.data)
+            # terrain pieces (stairs, ramps, low blocks) are walked on, not walked around
+            walkable = {mujoco.mj_name2id(model, mujoco.mjtObj.mjOBJ_GEOM, f"obj_{i}")
+                        for i, o in enumerate(self.obstacles) if o.get("kind") == "terrain"}
+            self.grid.rasterize_truth(model, self.data, walkable=walkable - {-1})
             self.grid.reset_lidar()
             self.nav.clear()
             self.scene_version += 1
