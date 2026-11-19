@@ -52,6 +52,20 @@ def test_push_moves_the_standing_robot_without_a_fall(sess):
         sess.push("up")
 
 
+def test_mpc_controller_choice_walks_to_a_goal(sess):
+    sess.set_controller("mpc")
+    assert sess.controller.name == "mpc"
+    with sess.lock:
+        sess.nav.set_goal([1.5, 0.5], yaw=0.5)
+        sess.running = True
+    assert wait_for(lambda: sess.nav.state in ("reached", "failed", "fallen"), timeout=60), sess.nav.to_dict()
+    assert sess.nav.state == "reached"
+    with sess.lock:
+        x, y, _ = base_pose(sess.data)
+    assert np.hypot(x - 1.5, y - 0.5) < 0.05
+    assert sess.falls == 0
+
+
 def test_navigation_on_the_slam_map_and_pose(sess):
     sess.lidar_cfg.enabled = True
     sess.random_obstacles(10, seed=7)
