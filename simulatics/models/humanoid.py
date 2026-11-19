@@ -271,6 +271,8 @@ def build_mjcf(p: HumanoidParams, obstacles: list[dict] | None = None, props: li
     "shape" ("box" default, or "cylinder": radius hx, half-height hz),
     "rgba" [r, g, b, a] and "name" (e.g. "red box"; the geom is named obj_<i>).
     A box obstacle about 0.9 m tall works as a table (see sim/props.py).
+    Terrain (sim/terrain.py) may also give "z" (centre height, default hz: resting on the floor) and
+    "pitch" / "roll" (rad; ramps: orientation Rz(yaw) Ry(pitch) Rx(roll)), and "kind": "terrain".
 
     props: list of free bodies the hands can pick up: {"name": "red cube",
     "shape": "box"|"sphere"|"cylinder", "size": MuJoCo half-sizes (box [hx, hy, hz],
@@ -334,7 +336,18 @@ def build_mjcf(p: HumanoidParams, obstacles: list[dict] | None = None, props: li
             shape = f'type="cylinder" size="{_f(hx, hz)}"'
         else:
             shape = f'type="box" size="{_f(hx, hy, hz)}"'
-        obs_xml += (f'    <geom name="obj_{i}" {shape} pos="{_f(x, y, hz)}" euler="0 0 {_f(yaw)}" '
+        zc = float(o.get("z", hz))
+        if "pitch" in o or "roll" in o:
+            # tilted terrain (ramps): R = Rz(yaw) Ry(pitch) Rx(roll), written as a quaternion
+            cy, sy = math.cos(float(o.get("yaw", 0.0)) / 2), math.sin(float(o.get("yaw", 0.0)) / 2)
+            cp, sp = math.cos(float(o.get("pitch", 0.0)) / 2), math.sin(float(o.get("pitch", 0.0)) / 2)
+            cr, sr = math.cos(float(o.get("roll", 0.0)) / 2), math.sin(float(o.get("roll", 0.0)) / 2)
+            quat = (cy * cp * cr + sy * sp * sr, cy * cp * sr - sy * sp * cr, cy * sp * cr + sy * cp * sr,
+                    sy * cp * cr - cy * sp * sr)
+            orient = f'quat="{_f(*quat)}"'
+        else:
+            orient = f'euler="0 0 {_f(yaw)}"'
+        obs_xml += (f'    <geom name="obj_{i}" {shape} pos="{_f(x, y, zc)}" {orient} '
                     f'rgba="{rgba}" group="1" contype="1" conaffinity="1"/>\n')
 
     head_z = tl / 2 + p.head_radius + 0.05

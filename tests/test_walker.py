@@ -11,7 +11,7 @@ import pytest
 from simulatics.control.walk_footsteps import LEFT, RIGHT, StepLimits, plan_footsteps, square_up, wrap
 from simulatics.control.walk_ik import SIDES, RobotGeometry, leg_ik, model_supported, rot_x, rot_y, rot_z
 from simulatics.control.walk_preview import ZmpPreview
-from simulatics.control.walker import WalkController, simulate_walk
+from simulatics.control.walker import TimedPush, WalkController, WalkParams, push_trials, simulate_walk
 from simulatics.models import HumanoidParams, build_mjcf
 from simulatics.plan.grid import GridMap
 
@@ -263,7 +263,103 @@ def test_motors_without_torque_or_ctrl_limits():
     assert s["mode"] == "stand" and d.ctrl[knee] > 0.2 and abs(d.qpos[2] - z0) < 0.02
 
 
+VELOCITY_CASES = [(0.1, 0.0, 0.0), (0.2, 0.0, 0.0), (0.3, 0.0, 0.0), (0.0, -0.1, 0.0), (0.0, 0.1, 0.0),
+                  (0.0, 0.0, -0.5), (0.0, 0.0, 0.5), (0.2, 0.0, 0.3)]
+
+
+def _velocity_run(commands, period, seconds, params=None):
+    """Hold each command for `period` s from reset (the distillation teacher's usage). Returns the
+    controller, data, the start pose, the time walked and the accumulated (unwrapped) torso yaw change."""
+    m, d = make()
+    c = WalkController(m, params)
+    c.reset(m, d)
+    c.set_path(None)
+    start = d.qpos[:3].copy()
+    t, cur, turned = 0.0, None, 0.0
+    yaw = lambda: float(np.arctan2(d.xmat[c.torso_id][3], d.xmat[c.torso_id][0]))   # noqa: E731
+    prev = yaw()
+    while t < seconds and c.mode != "fallen":
+        cmd = commands[min(int(t / period), len(commands) - 1)]
+        if cmd != cur:
+            c.set_velocity(*cmd)
+            cur = cmd
+        c.step(m, d)
+        mujoco.mj_step(m, d, c.substeps)
+        t += c.control_dt
+        now = yaw()
+        turned += float(wrap(now - prev))
+        prev = now
+    return c, d, start, t, turned
+
+
+@pytest.mark.parametrize("cmd", VELOCITY_CASES)
+def test_velocity_mode_walks_ten_seconds(cmd):
+    """WalkController.set_velocity is the teacher for policy distillation: each command held for 10 s from
+    reset must neither fall nor stall, and the robot must move the commanded way."""
+    c, d, start, t, turned = _velocity_run([cmd], 1e9, 10.0)
+    assert c.mode == "walk" and t >= 10.0 - 1e-6
+    vx, vy, wz = cmd
+    if wz == 0.0:
+        # mean speed within 40 % of the command over the 10 s (the start-up weight shift included)
+        want = np.array([vx, vy]) * 10.0
+        assert np.linalg.norm(d.qpos[:2] - start[:2] - want) <= 0.4 * np.linalg.norm(want) + 0.1
+    else:
+        assert np.sign(turned) == np.sign(wz) and 0.5 * abs(wz) * 10.0 <= abs(turned) <= 1.2 * abs(wz) * 10.0
+
+
+@pytest.mark.parametrize("recovery", [True, False])
+def test_velocity_mode_survives_command_changes_every_two_seconds(recovery):
+    """Also with recovery=False: the distillation teacher's fixed step timing."""
+    seq = [(0.2, 0.0, 0.0), (0.3, 0.0, 0.3), (0.0, 0.1, 0.0), (0.1, -0.1, -0.5), (0.3, 0.0, 0.0),
+           (0.0, 0.0, 0.5), (0.2, 0.1, 0.0)]
+    c, d, start, t, _ = _velocity_run(seq, 2.0, 14.0, WalkParams(recovery=recovery))
+    assert c.mode == "walk" and t >= 14.0 - 1e-6
+    if not recovery:
+        assert c.recovery_steps == 0 and c.recoveries == 0
+
+
 def test_simulate_walk_ends_on_goal_even_if_the_path_does_not():
     m, _ = make()
     r = simulate_walk(m, (0.6, 0.0), path=np.array([[0.0, 0.0], [0.3, 0.0]]), timeout=20)
     assert r["reached"] and r["error_m"] < 0.03
+
+
+# ---------------------------------------------------------------- push recovery
+@pytest.mark.parametrize("force", [(0.0, 140.0, 0.0), (-140.0, 0.0, 0.0)])
+def test_standing_robot_recovers_from_a_140N_push(force):
+    """0.1 s, 140 N on the torso while standing: beyond the ankles, so it must shift its weight or step. The
+    fixed-timing walker (recovery=False) falls."""
+    m, _ = make()
+    r = simulate_walk(m, None, timeout=5.0, push=(1.0, force, 0.1), push_frame="robot")
+    assert not r["fell"] and r["reached"]
+    old = simulate_walk(m, None, timeout=5.0, push=(1.0, force, 0.1), push_frame="robot",
+                        params=WalkParams(recovery=False))
+    assert old["fell"]
+
+
+@pytest.mark.parametrize("force", [(0.0, 80.0, 0.0), (80.0, 0.0, 0.0)])
+def test_walking_robot_recovers_from_a_push_and_still_stops_on_the_goal(force):
+    m, _ = make()
+    r = simulate_walk(m, (3.0, 0.0), timeout=40, push=(2.6, force, 0.1), push_frame="robot")
+    assert r["reached"] and not r["fell"] and r["error_m"] < 0.03
+    assert len(r["pushes"]) == 1 and r["status"]["recovering"] is False
+
+
+def test_push_api():
+    m, d = make()
+    c = WalkController(m)
+    c.reset(m, d)
+    push = TimedPush((0.0, 50.0, 0.0), duration=0.05, frame="robot")
+    active = []
+    for _ in range(30):
+        active.append(push.update(m, d))
+        c.step(m, d)
+        mujoco.mj_step(m, d, c.substeps)
+    assert sum(active) == 10 and not active[-1] and np.allclose(d.xfrc_applied[c.torso_id], 0.0)
+    with pytest.raises(ValueError):
+        TimedPush((np.nan, 0.0, 0.0))
+    with pytest.raises(ValueError):
+        simulate_walk(m, (1.0, 0.0), push=(1.0, (0.0, 1.0, 0.0), -0.1))
+    r = push_trials(m, kind="stand", force=60.0, direction="random", n=2, seed=0)
+    assert r["n"] == 2 and r["survived"] == 2 and len(r["trials"]) == 2
+    assert set(c.status()) >= {"recovering", "recovery_steps", "terrain", "footsteps_z"}
