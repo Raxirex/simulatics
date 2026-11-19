@@ -106,6 +106,7 @@
         <select id="ctrl-kind">
           <option value="auto">Automatic (best available)</option>
           <option value="walker">Model-based walker (footsteps + balance)</option>
+          <option value="mpc">Model-predictive control (MPC, adapts footsteps)</option>
           <option value="rl">Learned policy (PPO / distilled)</option>
           <option value="es-policy">Evolved policy (ES / GA)</option>
           <option value="manual">Manual joint targets</option>
@@ -113,6 +114,15 @@
       </label>
       <div class="info" id="n-status"></div>
       <div class="row"><button id="n-clear">Stop and clear goals</button></div>
+      <h3>Push the robot</h3>
+      <div class="row">
+        <label>Force (N) <input type="number" id="pu-force" value="60" min="0" max="1000" step="10"></label>
+        <label>Duration (s) <input type="number" id="pu-dur" value="0.1" min="0.01" max="1" step="0.05"></label>
+      </div>
+      <div class="row">
+        <button data-push="left">From the right</button><button data-push="right">From the left</button>
+        <button data-push="forward">From behind</button><button data-push="back">From the front</button>
+      </div>
       <h3>World</h3>
       <div class="row">
         <label>Objects <input type="number" id="o-n" value="14" min="1" max="60"></label>

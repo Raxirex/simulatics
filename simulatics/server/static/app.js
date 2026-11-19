@@ -519,6 +519,9 @@ function wire(s) {
     const r = await api('/api/controller', { kind: e.target.value });
     if (r.kind !== e.target.value || (e.target.value !== 'auto' && r.name !== e.target.value)) toast(`Using "${r.name}": the selected controller is not available for this robot.`);
   });
+  document.querySelectorAll('[data-push]').forEach(b => b.addEventListener('click', () =>
+    api('/api/push', { direction: b.dataset.push, force: +$('pu-force').value, duration: +$('pu-dur').value })
+      .then(r => toast(r.message, true))));
   $('o-random').addEventListener('click', async () => buildScene((await api('/api/obstacles', { action: 'random', n: +$('o-n').value })).scene));
   $('o-clear').addEventListener('click', async () => buildScene((await api('/api/obstacles', { action: 'clear' })).scene));
   $('n-source').addEventListener('change', (e) => api('/api/nav', { source: e.target.value }));

@@ -84,6 +84,7 @@ class SimSession:
         self.pilot = PilotRunner(self.robot)
         self.rl_policy = None            # PPO / distilled policy (train/ppo.py RLPolicy)
         self._arm_tick = 0
+        self._push = None                # (end sim time, world force) while a push is applied
         self.build()
         self._thread = threading.Thread(target=self._loop, name="sim", daemon=True)
         self._thread.start()
@@ -141,7 +142,14 @@ class SimSession:
         if getattr(self, "rl_policy", None) is not None and kind in ("auto", "rl"):
             from ..train.ppo import RLController
             return RLController(m, self.rl_policy)
-        if kind in ("auto", "walker"):
+        if kind == "mpc":
+            try:
+                from ..control.mpc import MPCWalkController
+                if MPCWalkController.supports(m):
+                    return MPCWalkController(m)
+            except ImportError:
+                pass
+        if kind in ("auto", "walker", "mpc"):
             try:
                 from ..control.walker import WalkController
                 if WalkController.supports(m):
@@ -164,6 +172,7 @@ class SimSession:
                 mujoco.mj_resetData(self.model, self.data)
             mujoco.mj_forward(self.model, self.data)
             self.falls = getattr(self, "falls", 0)
+            self._push = None  # mj_resetData already cleared xfrc_applied
             if self.controller is not None:
                 self.controller.reset(self.model, self.data)
                 self.controller.set_path(None)
@@ -395,6 +404,23 @@ class SimSession:
         if threading.current_thread() is not self._thread and self._thread.is_alive():
             self._thread.join(timeout)
 
+    def push(self, direction: str = "left", force: float = 60.0, duration: float = 0.1) -> str:
+        """Shove the torso: a horizontal force in the robot's frame for `duration` seconds of sim time."""
+        dirs = {"forward": (1, 0), "back": (-1, 0), "left": (0, 1), "right": (0, -1)}
+        if direction not in dirs:
+            raise ValueError(f"direction must be one of {list(dirs)}")
+        force = float(np.clip(force, 0.0, 1000.0))
+        duration = float(np.clip(duration, 0.01, 1.0))
+        with self.lock:
+            if self.task is None:
+                raise ValueError("this model has no free-floating body to push")
+            _, _, yaw = base_pose(self.data)
+            fx, fy = dirs[direction]
+            c, s = np.cos(yaw), np.sin(yaw)
+            self._push = (float(self.data.time) + duration, np.array([c * fx - s * fy, s * fx + c * fy, 0.0]) * force)
+            self.running = True
+        return f"pushing {direction} with {force:.0f} N for {duration:.2f} s"
+
     def step_once(self) -> None:
         self._step_once = True
 
@@ -416,6 +442,14 @@ class SimSession:
             every = max(1, int(round(self.arms.control_dt / c.control_dt)))
             if self._arm_tick % every == 0:
                 self.arms.step(m, d)
+        root = 1 if m.nbody > 1 else 0
+        if self._push is not None:
+            end, f = self._push
+            if d.time < end:
+                d.xfrc_applied[root, :3] = f
+            else:
+                d.xfrc_applied[root, :3] = 0.0
+                self._push = None
         mujoco.mj_step(m, d, max(1, int(round(c.control_dt / m.opt.timestep))))
         if task is None or isinstance(c, ManualController):
             return

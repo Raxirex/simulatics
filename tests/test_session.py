@@ -36,6 +36,22 @@ def test_default_controller_is_the_walker_and_arms_are_attached(sess):
     assert "not attached" not in msg
 
 
+def test_push_moves_the_standing_robot_without_a_fall(sess):
+    sess.running = True
+    time.sleep(0.3)
+    with sess.lock:
+        y0 = float(sess.data.qvel[1])
+    msg = sess.push("left", force=60.0, duration=0.1)
+    assert "pushing left" in msg
+    assert wait_for(lambda: sess._push is None, timeout=10)
+    with sess.lock:
+        assert np.allclose(sess.data.xfrc_applied, 0.0)  # the force is removed after the push
+    time.sleep(1.0)
+    assert sess.falls == 0
+    with pytest.raises(ValueError):
+        sess.push("up")
+
+
 def test_click_to_walk_reaches_queued_goals_precisely(sess):
     with sess.lock:
         sess.nav.set_goal([1.2, 0.0])

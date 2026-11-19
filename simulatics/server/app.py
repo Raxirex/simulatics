@@ -207,6 +207,11 @@ def create_app() -> FastAPI:
         state["cad"] = None
         return {"scene": sess.scene(), "obstacles": len(sess.obstacles), "props": len(sess.props)}
 
+    @app.post("/api/push")
+    def push(d: dict = Body(...)):
+        return {"message": guard(sess.push, str(d.get("direction", "left")), float(d.get("force", 60)),
+                                 float(d.get("duration", 0.1)))}
+
     @app.get("/api/objects")
     def objects():
         return guard(sess.robot.objects)
@@ -276,7 +281,7 @@ def create_app() -> FastAPI:
     @app.post("/api/controller")
     def controller(d: dict = Body(...)):
         kind = d.get("kind", "auto")
-        if kind not in ("auto", "walker", "rl", "es-policy", "manual"):
+        if kind not in ("auto", "walker", "mpc", "rl", "es-policy", "manual"):
             raise HTTPException(400, "unknown controller")
         guard(sess.set_controller, kind)
         return {"name": sess.controller.name, "kind": sess.controller_kind}
