@@ -75,6 +75,7 @@ offline scripted pilot runs simple missions ("walk to the red box", "pick up the
 | Push recovery while walking, 0.1 s torso push (n=16, unseen seed) | sideways 60 N 15/16 (was 9/16), 100 N 8/16 (was 0/16); standing 140 N 8/8 (was 0/8) |
 | Terrain | random 1-5 cm steps 9/10 seeds; 6-8 cm stairs and 8 deg ramps pass; 3-9 mm at the goal |
 | SLAM over 20-26 m walks, three worlds | trajectory error 2-6 cm vs 1.4-1.7 m for odometry alone; 1-6 ms per scan |
+| Learned walking policy (distilled from the walker with DAgger, 45 min CPU) | 40/40 held-out 2-4 m goals, 0 falls; error median 5 cm, max 7.5 cm; tracks 0.2-0.4 m/s and turns in place |
 | Motion imitation (walk clip, 35 min PPO on 4 threads) | 25 s without falls; 0.2 deg joint, 2.7 mm hand/foot, 6.6 mm root error |
 | ROS 2 bridge (against a mock rosbridge server) | all topics at target rates; a /goal_pose walked the robot to within 7 mm |
 
@@ -119,8 +120,10 @@ docs/ROS2.md               using the bridge with ROS 2
 
 ## Known limits
 
-- **Learned velocity walking** (PPO / distillation) is CPU-bound here; see the Train tab and `runs/` for the
-  current policy and its measured quality. The model-based walker and the MPC are the accurate controllers.
+- **Learned walking** (`runs/rl_walker`, distilled from the walker) stops about 5 cm from goals, not
+  millimetres; it never returns to a full stand once it has walked (it steps in place), and it was trained for
+  flat ground without sensor noise. PPO fine-tuning on CPU did not improve it. The model-based walker and the
+  MPC are the accurate controllers.
 - **Pushes.** A 100 N sideways push while walking is survived about half the time; forward/back 100 N
   recovery is no better than without the recovery planner. Push and terrain tests used the default body.
 - **Terrain** is rigid and static; the walker snapshots it when it is built. Stairs need treads of about 0.3 m.
