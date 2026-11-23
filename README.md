@@ -50,6 +50,7 @@ offline scripted pilot runs simple missions ("walk to the red box", "pick up the
 | Tab | Features |
 |---|---|
 | **Model** | Sliders for limb lengths, radii, density, motor stiffness and torque limits, timestep, friction; arms and hands toggles. Each change regenerates and recompiles the MJCF. Export MJCF, or import any MJCF/URDF file. |
+| **Workshop** | The robot stands still, seen from the front (rotate, or jump to side / back / top views) in front of a coordinate backdrop (height and side in metres). Drag a lidar, cameras or a payload from the palette onto the robot: they snap to the surface and a 5 mm-5 cm grid and stay where dropped. Drag mounted parts to move them; edit position, field of view and mass in the list. The lidar stays level wherever it is mounted; cameras look out of the surface and appear in the Sensors tab and the AI pilot's `look` tool. |
 | **Motors** | Per-motor table edited live in the compiled model: kp, kv, torque limit, joint damping, rotor inertia, manual targets. |
 | **Sensors** | Spinning lidar drawn as a point cloud; RGB or depth cameras (`head_cam`, `work_cam` looking at the hands, `chase`); foot contact forces. ROS 2 bridge: connect to a rosbridge server (or native rclpy) and publish /tf, /odom, /scan, /imu, /joint_states, camera, /map, /plan, /robot_description; take /cmd_vel, /goal_pose (RViz "2D Goal Pose") and arm commands. |
 | **Walk** | Double-click the floor to send the robot there; Ctrl + drag to also set the direction to face; Shift to queue goals. Choose the controller (model-based walker with push recovery, MPC, learned policy, evolved policy, manual). Planned path and footsteps are drawn (at terrain height); the stopping error is shown. Push the robot from any side. Terrain courses (random steps, stairs, ramps). Plan on the ground-truth map, the lidar map, or the SLAM map with the SLAM pose, with the estimate, its uncertainty and the SLAM / odometry / true trails drawn. |
@@ -99,6 +100,7 @@ offline scripted pilot runs simple missions ("walk to the red box", "pick up the
 ```
 simulatics/
   models/humanoid.py       parametric humanoid -> MJCF (geometry, motors, arms, hands, props)
+  models/accessories.py    lidar / camera / payload mounting (MjSpec), surface + grid snapping
   control/                 controller protocol, path follower,
     walker.py, walk_*.py   model-based walking: footsteps, ZMP preview, DCM balance, leg IK,
                            push recovery, terrain
@@ -132,6 +134,8 @@ docs/ROS2.md               using the bridge with ROS 2
 - **Body range.** Accurate walking was verified for thigh/shin 0.28-0.55 m, pelvis 0.14-0.30 m, foot
   0.16-0.30 x 0.07-0.13 m, density 600-1300 kg/m3. The sliders allow more; very heavy or short-footed bodies
   can fall.
+- **Accessory mass matters.** Standing push recovery has little margin: with 0.25 kg on top of the head the
+  default robot falls from a 60 N sideways push that it survives at 0.1 kg (the default lidar mass).
 - **Arms** have no shoulder yaw, so each hand works on its own side and in front.
 - **Claude** has not been tested live (no API key on the development machine); request shapes are verified
   against a fake client.

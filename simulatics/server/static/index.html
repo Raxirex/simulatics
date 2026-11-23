@@ -39,6 +39,7 @@
   <aside>
     <nav id="tabs">
       <button data-tab="model" class="active">Model</button>
+      <button data-tab="workshop">Workshop</button>
       <button data-tab="motors">Motors</button>
       <button data-tab="sensors">Sensors</button>
       <button data-tab="plan">Walk</button>
@@ -65,6 +66,23 @@
       <p class="hint">Path to an MJCF or URDF file on this computer, for example a Unitree G1 scene from MuJoCo Menagerie.</p>
       <input type="text" id="model-path" placeholder="C:\path\to\scene.xml">
       <div class="row"><button id="model-load">Load file</button><button id="model-builtin">Back to built-in</button></div>
+    </section>
+
+    <!-- ============================================================ WORKSHOP -->
+    <section id="tab-workshop" class="tab">
+      <p class="hint">The robot stands still, seen from the front. <b>Drag</b> an accessory from the palette onto the robot: it snaps to the surface (and the grid) and stays where you drop it. Drag a mounted accessory to move it, click it to select. Rotate the view with the mouse. The backdrop shows height and side coordinates in metres.</p>
+      <div id="ws-palette"></div>
+      <div class="row">
+        <label>Snap to grid <select id="ws-snap">
+          <option value="0">off</option><option value="0.005">5 mm</option><option value="0.01" selected>1 cm</option>
+          <option value="0.02">2 cm</option><option value="0.05">5 cm</option></select></label>
+        <label class="check"><input type="checkbox" id="ws-grid" checked> Coordinate backdrop</label>
+      </div>
+      <div class="row"><button data-view="front">Front</button><button data-view="side">Side</button><button data-view="back">Back</button><button data-view="top">Top</button></div>
+      <div class="info" id="ws-hover">Point at the robot to read coordinates.</div>
+      <h3>Mounted</h3>
+      <div id="ws-list"></div>
+      <div class="info bad" id="ws-warn"></div>
     </section>
 
     <!-- ============================================================ MOTORS -->

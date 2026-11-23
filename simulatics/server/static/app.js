@@ -88,7 +88,7 @@ slamGroup.add(slamArrow, slamEllipse, slamTraj, odomTraj, trueTraj);
 slamGroup.visible = false;
 let slamScans = -1;
 function onSlam(s, truePts) {
-  slamGroup.visible = !!s && $('n-showslam').checked;
+  slamGroup.visible = !!s && $('n-showslam').checked && !ws.on;
   if (!s) { $('n-slam').textContent = ''; return; }
   const [x, y, yaw] = s.pose;
   slamArrow.position.set(x, y, 0.06); slamArrow.rotation.set(0, 0, yaw);
@@ -149,6 +149,8 @@ function buildScene(s) {
         transparent: g.rgba[3] < 1, opacity: g.rgba[3] });
       mesh = new THREE.Mesh(geo, mat); mesh.castShadow = true; mesh.receiveShadow = true;
     }
+    mesh.userData = { index: geomMeshes.length, robot: g.robot, name: g.name,
+                      acc: g.name && g.name.startsWith('acc_') ? g.name.slice(4) : null };
     robotGroup.add(mesh); geomMeshes.push(mesh);
   }
   mapMesh.scale.set(gridInfo.size, gridInfo.size, 1);
@@ -160,6 +162,7 @@ function buildScene(s) {
   for (const n of (s.cameras.length ? s.cameras : ['free'])) sel.add(new Option(n, n));
   if ([...sel.options].some(o => o.value === cur)) sel.value = cur;
   refreshObjects();
+  if (ws.on) highlightAccessory();
 }
 
 function resize() {
@@ -520,6 +523,7 @@ function wire(s) {
     b.classList.add('active'); $('tab-' + b.dataset.tab).classList.add('active');
     if (b.dataset.tab === 'arms') refreshObjects();
     if (b.dataset.tab === 'design') { pollTopo(); pollOpt(); }
+    if (b.dataset.tab === 'workshop') enterWorkshop(); else if (ws.on) exitWorkshop();
   }));
   $('play').addEventListener('click', () => api('/api/sim', { action: $('play').dataset.running ? 'pause' : 'play' }));
   $('step').addEventListener('click', () => api('/api/sim', { action: 'step' }));
@@ -564,6 +568,10 @@ function wire(s) {
     if (!rosTimer) rosTimer = setInterval(pollRos, 1000);
   });
   $('ros-disconnect').addEventListener('click', async () => showRos(await api('/api/ros/disconnect', {})));
+
+  // workshop
+  document.querySelectorAll('[data-view]').forEach(b => b.addEventListener('click', () => setView(b.dataset.view)));
+  $('ws-grid').addEventListener('change', (e) => { if (ws.backdrop) ws.backdrop.visible = e.target.checked; });
 
   // terrain courses
   $('tc-build').addEventListener('click', async () => {
@@ -681,6 +689,170 @@ function wire(s) {
   $('p-unload').addEventListener('click', () => api('/api/policy/unload', {}));
   $('auto-reset').addEventListener('change', (e) => api('/api/sim', { auto_reset: e.target.checked }));
 }
+
+
+// ---------------------------------------------------------------- workshop: mount accessories
+const ws = { on: false, saved: null, sel: null, items: [], types: {}, move: null, backdrop: null };
+const wsGhost = new THREE.ArrowHelper(new THREE.Vector3(0, 0, 1), new THREE.Vector3(), 0.14, 0xffd34d, 0.05, 0.035);
+wsGhost.visible = false; scene.add(wsGhost);
+const ACC_COLORS = { lidar: '#26bf73', camera: '#2e3342', payload: '#d19a4d' };
+
+function textSprite(text, color = '#c9d1dc') {
+  const c = document.createElement('canvas'); c.width = 256; c.height = 64;
+  const g = c.getContext('2d'); g.font = '28px system-ui'; g.fillStyle = color; g.textBaseline = 'middle';
+  g.fillText(text, 6, 32);
+  const sp = new THREE.Sprite(new THREE.SpriteMaterial({ map: new THREE.CanvasTexture(c), depthTest: false, transparent: true }));
+  sp.scale.set(0.32, 0.08, 1); return sp;
+}
+function buildBackdrop() {
+  if (ws.backdrop) scene.remove(ws.backdrop);
+  const grp = new THREE.Group(), cx = rootPos.x - 0.8, cy = rootPos.y;
+  // vertical grid behind the robot in the y-z plane: 10 cm cells, 2.4 m wide, 0 to 2.4 m high
+  const grid = new THREE.GridHelper(2.4, 24, 0x5a6372, 0x353b46);
+  grid.rotation.z = Math.PI / 2; grid.position.set(cx, cy, 1.2); grp.add(grid);
+  const line = (a, b, color) => grp.add(new THREE.Line(new THREE.BufferGeometry().setFromPoints([a, b]),
+    new THREE.LineBasicMaterial({ color })));
+  line(new THREE.Vector3(cx + 0.002, cy, 0), new THREE.Vector3(cx + 0.002, cy, 2.4), 0x4f9cf9);       // centre line (y = robot)
+  line(new THREE.Vector3(cx + 0.002, cy - 1.2, 0.002), new THREE.Vector3(cx + 0.002, cy + 1.2, 0.002), 0x4f9cf9);
+  for (let z = 0.2; z <= 2.4001; z += 0.2) {                     // height labels on both edges
+    for (const side of [-1, 1]) {
+      const t = textSprite(`z ${z.toFixed(1)} m`); t.position.set(cx + 0.01, cy + side * 1.05, z + 0.03); grp.add(t);
+    }
+  }
+  for (let y = -1.2; y <= 1.2001; y += 0.4) {                    // side (horizontal) labels along the floor
+    const t = textSprite(`y ${(cy + y).toFixed(1)}`); t.position.set(cx + 0.01, cy + y, -0.06); grp.add(t);
+  }
+  grp.visible = $('ws-grid').checked; ws.backdrop = grp; scene.add(grp);
+}
+function setView(kind) {
+  const t = new THREE.Vector3(rootPos.x, rootPos.y, 0.85), d = 2.8;
+  const off = { front: [d, 0, 0.2], side: [0, -d, 0.2], back: [-d, 0, 0.2], top: [0.01, 0, d] }[kind] || [d, 0, 0.2];
+  controls.target.copy(t); camera.position.set(t.x + off[0], t.y + off[1], t.z + off[2]); controls.update();
+}
+async function enterWorkshop() {
+  if (!ws.on) {
+    ws.on = true;
+    ws.saved = { pos: camera.position.clone(), target: controls.target.clone(), follow: $('follow').checked };
+    $('follow').checked = false;
+  }
+  renderAccessories(await api('/api/workshop', { enter: true }));
+  setTimeout(() => { setView('front'); buildBackdrop(); }, 150);   // after the reset pose reaches the view
+}
+function exitWorkshop() {
+  ws.on = false; wsGhost.visible = false; ws.move = null;
+  if (ws.backdrop) ws.backdrop.visible = false;
+  if (ws.saved) { camera.position.copy(ws.saved.pos); controls.target.copy(ws.saved.target); $('follow').checked = ws.saved.follow; }
+  highlightAccessory(null);
+}
+function robotHit(e, includeAccessories = false) {
+  const r = canvas.getBoundingClientRect();
+  ray.setFromCamera(new THREE.Vector2(((e.clientX - r.left) / r.width) * 2 - 1, -((e.clientY - r.top) / r.height) * 2 + 1), camera);
+  const targets = geomMeshes.filter(m => m.isMesh && m.userData.robot && (includeAccessories || !m.userData.acc));
+  return ray.intersectObjects(targets, false)[0] || null;
+}
+function hitNormal(hit) { return hit.face.normal.clone().transformDirection(hit.object.matrixWorld).normalize(); }
+function showGhost(hit) {
+  if (!hit) { wsGhost.visible = false; return; }
+  wsGhost.position.copy(hit.point); wsGhost.setDirection(hitNormal(hit)); wsGhost.visible = true;
+}
+function hoverText(hit) {
+  if (!hit) return 'Point at the robot to read coordinates.';
+  const p = hit.point;
+  return `x ${fixed(p.x, 3)}  y ${fixed(p.y, 3)}  z ${fixed(p.z, 3)} m  on ${hit.object.userData.name || 'robot'}`;
+}
+async function placeAt(hit, type, id) {
+  const n = hitNormal(hit);
+  const r = await api('/api/accessories/place', { type, id, geom: hit.object.userData.index,
+    point: [hit.point.x, hit.point.y, hit.point.z], normal: [n.x, n.y, n.z], snap: +$('ws-snap').value });
+  ws.sel = r.placed.id;
+  applyState(r); renderAccessories(r);
+  toast(`${ws.types[r.placed.type]?.label || r.placed.type} mounted on ${r.placed.body}`, true);
+}
+function highlightAccessory() {
+  for (const m of geomMeshes) {
+    if (!m.isMesh || !m.userData.acc) continue;
+    m.material.emissive = new THREE.Color(m.userData.acc === ws.sel && ws.on ? 0x3366aa : 0x000000);
+  }
+}
+function renderAccessories(info) {
+  ws.items = info.items || []; ws.types = info.types || ws.types;
+  const pal = $('ws-palette');
+  if (!pal.children.length) {
+    for (const [k, t] of Object.entries(ws.types)) {
+      const d = document.createElement('div'); d.className = 'pal'; d.draggable = true; d.title = t.hint;
+      d.innerHTML = `<span class="sw" style="background:${ACC_COLORS[k] || '#888'}"></span><b>${esc(t.label)}</b><small>drag onto the robot</small>`;
+      d.addEventListener('dragstart', (e) => { e.dataTransfer.setData('text/plain', 'acc:' + k); e.dataTransfer.effectAllowed = 'copy'; ws.dragType = k; });
+      d.addEventListener('dragend', () => { ws.dragType = null; wsGhost.visible = false; });
+      pal.append(d);
+    }
+  }
+  const list = $('ws-list'); list.innerHTML = '';
+  if (!info.editable) list.innerHTML = '<p class="hint">Accessories can be mounted on the built-in robot only.</p>';
+  for (const a of ws.items) {
+    const row = document.createElement('div'); row.className = 'acc' + (a.id === ws.sel ? ' sel' : '');
+    const cm = (v) => (+v * 100).toFixed(1);
+    row.innerHTML = `<b>${esc(a.label)}</b> <small>on ${esc(a.body)}${a.world ? ` - world ${a.world.map(v => fixed(v, 2)).join(', ')}` : ''}</small>
+      <div class="grid3"><label>x cm <input type="number" step="0.5" data-k="0" value="${cm(a.pos[0])}"></label>
+      <label>y cm <input type="number" step="0.5" data-k="1" value="${cm(a.pos[1])}"></label>
+      <label>z cm <input type="number" step="0.5" data-k="2" value="${cm(a.pos[2])}"></label></div>
+      <div class="row">${a.type === 'camera' ? `<label>Field of view <input type="number" data-f="fovy" min="10" max="160" value="${a.fovy}"></label>` : ''}
+      <label>Mass kg <input type="number" data-f="mass" step="0.05" min="0.001" value="${a.mass}"></label>
+      <button data-del>Remove</button></div>`;
+    row.addEventListener('click', (e) => { if (e.target.tagName !== 'INPUT' && e.target.tagName !== 'BUTTON') { ws.sel = a.id; renderAccessories(info); highlightAccessory(); } });
+    row.querySelectorAll('input[data-k]').forEach(inp => inp.addEventListener('change', async () => {
+      const pos = [...row.querySelectorAll('input[data-k]')].map(i => +i.value / 100);
+      const r = await api('/api/accessories/update', { id: a.id, pos }); applyState(r); renderAccessories(r);
+    }));
+    row.querySelectorAll('input[data-f]').forEach(inp => inp.addEventListener('change', async () => {
+      const r = await api('/api/accessories/update', { id: a.id, [inp.dataset.f]: +inp.value }); applyState(r); renderAccessories(r);
+    }));
+    row.querySelector('[data-del]').addEventListener('click', async () => {
+      const r = await api('/api/accessories/delete', { id: a.id }); if (ws.sel === a.id) ws.sel = null;
+      applyState(r); renderAccessories(r);
+    });
+    list.append(row);
+  }
+  $('ws-warn').textContent = (info.warnings || []).join('\n');
+  highlightAccessory();
+}
+// drop from the palette
+canvas.addEventListener('dragover', (e) => {
+  if (!ws.on) return;
+  e.preventDefault(); e.dataTransfer.dropEffect = 'copy';
+  const hit = robotHit(e); showGhost(hit); $('ws-hover').textContent = hoverText(hit);
+});
+canvas.addEventListener('drop', async (e) => {
+  if (!ws.on) return;
+  e.preventDefault(); wsGhost.visible = false;
+  const data = e.dataTransfer.getData('text/plain') || ('acc:' + (ws.dragType || ''));
+  const hit = robotHit(e);
+  if (!data.startsWith('acc:') || !hit) { toast('Drop accessories onto the robot'); return; }
+  await placeAt(hit, data.slice(4));
+});
+// hover read-out; drag a mounted accessory to move it (captured before OrbitControls)
+canvas.addEventListener('pointerdown', (e) => {
+  if (!ws.on || e.button !== 0 || e.ctrlKey) return;
+  const hit = robotHit(e, true);
+  if (!hit || !hit.object.userData.acc) return;
+  e.stopImmediatePropagation(); e.preventDefault();
+  ws.move = { id: hit.object.userData.acc, x: e.clientX, y: e.clientY, moved: false, hit: null };
+  ws.sel = ws.move.id; highlightAccessory(); renderAccessories({ items: ws.items, types: ws.types, editable: true });
+  try { canvas.setPointerCapture(e.pointerId); } catch {}
+}, { capture: true });
+canvas.addEventListener('pointermove', (e) => {
+  if (!ws.on) return;
+  if (ws.move) {
+    if (Math.hypot(e.clientX - ws.move.x, e.clientY - ws.move.y) > 4) ws.move.moved = true;
+    const hit = robotHit(e); ws.move.hit = hit; showGhost(hit); $('ws-hover').textContent = hoverText(hit);
+    return;
+  }
+  $('ws-hover').textContent = hoverText(robotHit(e, true));
+});
+canvas.addEventListener('pointerup', async () => {
+  if (!ws.on || !ws.move) return;
+  const m = ws.move; ws.move = null; wsGhost.visible = false;
+  if (m.moved && m.hit) await placeAt(m.hit, null, m.id);
+});
 
 (async function main() {
   const s = await api('/api/state');

@@ -440,6 +440,35 @@ def create_app() -> FastAPI:
         sess.unload_policy()
         return {"ok": True}
 
+    # ---- workshop: accessories ---------------------------------------------
+    @app.post("/api/workshop")
+    def workshop(d: dict = Body(...)):
+        guard(sess.workshop, bool(d.get("enter", True)))
+        return sess.accessories_info()
+
+    @app.get("/api/accessories")
+    def accessories():
+        return _finite(sess.accessories_info())
+
+    @app.post("/api/accessories/place")
+    def accessories_place(d: dict = Body(...)):
+        acc = guard(sess.place_accessory, str(d.get("type", "")), int(d.get("geom", -1)), d.get("point"),
+                    d.get("normal"), float(d.get("snap", 0.01)), d.get("id"))
+        state["cad"] = None
+        return _finite({"placed": acc, **sess.accessories_info(), **full_state()})
+
+    @app.post("/api/accessories/update")
+    def accessories_update(d: dict = Body(...)):
+        guard(sess.update_accessory, str(d.get("id", "")), d)
+        state["cad"] = None
+        return _finite({**sess.accessories_info(), **full_state()})
+
+    @app.post("/api/accessories/delete")
+    def accessories_delete(d: dict = Body(...)):
+        guard(sess.delete_accessory, str(d.get("id", "")))
+        state["cad"] = None
+        return _finite({**sess.accessories_info(), **full_state()})
+
     # ---- motion imitation ----------------------------------------------------
     @app.get("/api/motions")
     def motions():

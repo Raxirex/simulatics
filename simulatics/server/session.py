@@ -52,6 +52,8 @@ class SimSession:
         self.arms = None                 # ArmController when the robot has hands
         self.custom_path: str | None = None
         self.cad_xml: str | None = None  # MJCF with CAD meshes / masses (Design tab), replaces the generated model
+        self.accessories: list[dict] | None = None  # lidar / cameras / payloads mounted in the Workshop
+        self.accessory_warnings: list[str] = []
         self.task_cfg = TaskConfig()
         self.lidar_cfg = LidarConfig()
         self.camera_cfg = {"enabled": False, "name": "head_cam", "depth": False}
@@ -127,10 +129,89 @@ class SimSession:
             self.map_seq += 1
 
     def generated_xml(self) -> str:
-        """MJCF of the built-in robot with the current world objects and props."""
+        """MJCF of the built-in robot with the current world objects, props and mounted accessories."""
+        from ..models.accessories import apply_accessories, default_accessories
         if self.props:
-            return build_mjcf(self.params, self.obstacles, props=self.props)
-        return build_mjcf(self.params, self.obstacles)
+            xml = build_mjcf(self.params, self.obstacles, props=self.props)
+        else:
+            xml = build_mjcf(self.params, self.obstacles)
+        if self.accessories is None:
+            self.accessories = default_accessories(xml)
+        xml, self.accessory_warnings = apply_accessories(xml, self.accessories)
+        return xml
+
+    # ---- workshop: accessories -------------------------------------------
+    def workshop(self, enter: bool) -> None:
+        """Workshop mode: the robot stands still in its reset pose while accessories are edited."""
+        with self.lock:
+            self.running = False
+            if enter:
+                self.reset()
+
+    def accessories_info(self) -> dict:
+        from ..models.accessories import TYPES, describe
+        with self.lock:
+            items = describe(self.model, self.data, self.accessories or []) if not self.custom_path else []
+        return {"types": {k: {"label": v["label"], "hint": v["hint"]} for k, v in TYPES.items()},
+                "items": items, "warnings": list(self.accessory_warnings),
+                "editable": not self.custom_path}
+
+    def place_accessory(self, acc_type: str, geom: int, point, normal, snap: float = 0.01,
+                        acc_id: str | None = None) -> dict:
+        """Mount a new accessory (or move `acc_id`) where it was dropped on the robot, then rebuild."""
+        from ..models.accessories import new_id, place
+        if self.custom_path:
+            raise ValueError("accessories can be mounted on the built-in robot only")
+        with self.lock:
+            items = list(self.accessories or [])
+            old = next((a for a in items if a["id"] == acc_id), None) if acc_id else None
+            if acc_id and old is None:
+                raise ValueError(f"no accessory {acc_id!r}")
+            kind = old["type"] if old else acc_type
+            mount = place(self.model, self.data, kind, int(geom), point, normal, float(snap))
+            if old:
+                old.update({k: mount[k] for k in ("body", "pos", "quat")})
+                acc = old
+            else:
+                if kind == "lidar":  # one lidar per robot: placing a new one moves it
+                    items = [a for a in items if a["type"] != "lidar"]
+                acc = {"id": new_id(), **mount}
+                items.append(acc)
+            self.accessories = items
+            self.cad_xml = None
+            self.build()
+            self.running = False
+        return acc
+
+    def update_accessory(self, acc_id: str, fields: dict) -> dict:
+        """Edit a mounted accessory's position (body frame, metres), orientation or parameters."""
+        with self.lock:
+            acc = next((a for a in (self.accessories or []) if a["id"] == acc_id), None)
+            if acc is None:
+                raise ValueError(f"no accessory {acc_id!r}")
+            if "pos" in fields:
+                pos = [float(v) for v in fields["pos"]]
+                if len(pos) != 3 or not all(np.isfinite(pos)) or max(abs(v) for v in pos) > 2.0:
+                    raise ValueError("position must be three numbers within 2 m of the body")
+                acc["pos"] = pos
+            if "fovy" in fields and acc["type"] == "camera":
+                acc["fovy"] = float(np.clip(float(fields["fovy"]), 10.0, 160.0))
+            if "mass" in fields:
+                acc["mass"] = float(np.clip(float(fields["mass"]), 0.001, 30.0))
+            self.cad_xml = None
+            self.build()
+            self.running = False
+            return acc
+
+    def delete_accessory(self, acc_id: str) -> None:
+        with self.lock:
+            before = len(self.accessories or [])
+            self.accessories = [a for a in (self.accessories or []) if a["id"] != acc_id]
+            if len(self.accessories) == before:
+                raise ValueError(f"no accessory {acc_id!r}")
+            self.cad_xml = None
+            self.build()
+            self.running = False
 
     def _make_arms(self):
         try:
