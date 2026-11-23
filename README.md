@@ -38,6 +38,24 @@ python -m venv .venv
 still works through Python fallbacks, only slower. STEP export needs the optional `[step]` extra
 (build123d, about 300 MB). No PyTorch or GPU is required.
 
+### Robot library
+
+Besides the built-in parametric humanoid, the Model tab can load robots from
+[MuJoCo Menagerie](https://github.com/google-deepmind/mujoco_menagerie), downloaded on first use from a pinned
+commit into `robots/` (not stored in this repository; each folder keeps its own `LICENSE`):
+
+| Robot | Licence | Notes |
+|---|---|---|
+| PNDbotics Adam Lite (humanoid) | MIT | starts on a support stand: it has no balance controller here |
+| Unitree Go2 (robot dog) | BSD-3-Clause | stands on its own (Menagerie has no MIT-licensed quadruped) |
+
+```bash
+.venv\Scripts\python.exe -m simulatics.robots fetch go2 adam_lite
+```
+
+Library robots hold their stand pose with a joint PD controller (gains capped by each joint's inertia so the
+explicit PD stays stable) and take Workshop accessories like the built-in robot; they do not walk yet.
+
 ### AI pilot
 
 The AI Pilot tab uses the Anthropic API. Either set `ANTHROPIC_API_KEY`, run `ant auth login`, or paste a key
@@ -50,7 +68,7 @@ offline scripted pilot runs simple missions ("walk to the red box", "pick up the
 | Tab | Features |
 |---|---|
 | **Model** | Sliders for limb lengths, radii, density, motor stiffness and torque limits, timestep, friction; arms and hands toggles. Each change regenerates and recompiles the MJCF. Export MJCF, or import any MJCF/URDF file. |
-| **Workshop** | The robot stands still, seen from the front (rotate, or jump to side / back / top views) in front of a coordinate backdrop (height and side in metres). Drag a lidar, cameras or a payload from the palette onto the robot: they snap to the surface and a 5 mm-5 cm grid and stay where dropped. Drag mounted parts to move them; edit position, field of view and mass in the list. The lidar stays level wherever it is mounted; cameras look out of the surface and appear in the Sensors tab and the AI pilot's `look` tool. |
+| **Workshop** | The robot stands still, seen from the front (rotate, or jump to side / back / top views) in front of a coordinate backdrop (height and side in metres). Drag a lidar, cameras or a payload from the palette onto the robot: they snap to the surface and a 5 mm-5 cm grid and stay where dropped. Works on library robots too; the built-in robot's head lidar can be switched off to start bare. Drag mounted parts to move them; edit position, field of view and mass in the list. The lidar stays level wherever it is mounted; cameras look out of the surface and appear in the Sensors tab and the AI pilot's `look` tool. |
 | **Motors** | Per-motor table edited live in the compiled model: kp, kv, torque limit, joint damping, rotor inertia, manual targets. |
 | **Sensors** | Spinning lidar drawn as a point cloud; RGB or depth cameras (`head_cam`, `work_cam` looking at the hands, `chase`); foot contact forces. ROS 2 bridge: connect to a rosbridge server (or native rclpy) and publish /tf, /odom, /scan, /imu, /joint_states, camera, /map, /plan, /robot_description; take /cmd_vel, /goal_pose (RViz "2D Goal Pose") and arm commands. |
 | **Walk** | Double-click the floor to send the robot there; Ctrl + drag to also set the direction to face; Shift to queue goals. Choose the controller (model-based walker with push recovery, MPC, learned policy, evolved policy, manual). Planned path and footsteps are drawn (at terrain height); the stopping error is shown. Push the robot from any side. Terrain courses (random steps, stairs, ramps). Plan on the ground-truth map, the lidar map, or the SLAM map with the SLAM pose, with the estimate, its uncertainty and the SLAM / odometry / true trails drawn. |
@@ -108,6 +126,7 @@ simulatics/
     arms.py                arm IK skills and grasping
   plan/                    occupancy grids, A*, behaviour-tree navigator, 2D lidar SLAM (slam.py)
   imitate/                 BVH import, retargeting, reference clips, motion tracking (DeepMimic-style)
+  robots.py                robot library (Menagerie downloads, pinned commit)
   bridge/                  ROS 2 bridge (rosbridge v2 client, rclpy backend, mock server)
   sim/                     locomotion tasks, vectorised environments, sensors, scenes and props
   train/                   evolution (ES/GA), PPO and distillation (numpy), policies
@@ -134,6 +153,7 @@ docs/ROS2.md               using the bridge with ROS 2
 - **Body range.** Accurate walking was verified for thigh/shin 0.28-0.55 m, pelvis 0.14-0.30 m, foot
   0.16-0.30 x 0.07-0.13 m, density 600-1300 kg/m3. The sliders allow more; very heavy or short-footed bodies
   can fall.
+- **Library robots** (Adam Lite, Go2) hold a pose but do not walk; Adam Lite falls without the support stand.
 - **Accessory mass matters.** Standing push recovery has little margin: with 0.25 kg on top of the head the
   default robot falls from a 60 N sideways push that it survives at 0.1 kg (the default lidar mass).
 - **Arms** have no shoulder yaw, so each hand works on its own side and in front.

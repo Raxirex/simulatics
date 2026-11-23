@@ -62,10 +62,24 @@ def default_accessories(xml: str) -> list[dict]:
 
 def apply_accessories(xml: str, accessories: list[dict]) -> tuple[str, list[str]]:
     """MJCF with the accessories mounted. Returns (xml, warnings) - unknown bodies are skipped, not fatal."""
-    if not accessories:
-        return xml, []
     spec = mujoco.MjSpec.from_string(xml)
+    warnings = apply_to_spec(spec, accessories)
+    return spec.to_xml(), warnings
+
+
+def apply_to_spec(spec: "mujoco.MjSpec", accessories: list[dict]) -> list[str]:
+    """Mount accessories on an MjSpec in place (works for imported robots loaded from file with assets).
+
+    The robot then has a lidar only if one is among the accessories: a built-in "lidar" site is removed
+    otherwise (that is how the default head lidar is switched off)."""
     warnings: list[str] = []
+    if not any(a.get("type") == "lidar" for a in accessories):
+        try:
+            old = spec.site("lidar")
+            if old is not None:
+                spec.delete(old)
+        except Exception:  # noqa: BLE001 - no such site
+            pass
     lidar_done = False
     for a in accessories:
         t = TYPES.get(a.get("type"))
@@ -101,7 +115,7 @@ def apply_accessories(xml: str, accessories: list[dict]) -> tuple[str, list[str]
             lidar_done = True
         elif a["type"] == "camera":
             body.add_camera(name=f"cam_{a['id']}", pos=pos, quat=quat, fovy=float(a.get("fovy", t["fovy"])))
-    return spec.to_xml(), warnings
+    return warnings
 
 
 def place(model: mujoco.MjModel, data: mujoco.MjData, acc_type: str, geom: int, point, normal,

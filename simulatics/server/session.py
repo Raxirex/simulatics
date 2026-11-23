@@ -54,6 +54,9 @@ class SimSession:
         self.cad_xml: str | None = None  # MJCF with CAD meshes / masses (Design tab), replaces the generated model
         self.accessories: list[dict] | None = None  # lidar / cameras / payloads mounted in the Workshop
         self.accessory_warnings: list[str] = []
+        self.default_lidar = True        # built-in robot starts with the head lidar
+        self.support_stand = False       # imported robots: hold the base on a stand (weld)
+        self.robot_name = "builtin"
         self.task_cfg = TaskConfig()
         self.lidar_cfg = LidarConfig()
         self.camera_cfg = {"enabled": False, "name": "head_cam", "depth": False}
@@ -107,7 +110,7 @@ class SimSession:
             self.pilot.stop(timeout=0.5)  # its goals and object names refer to the old world
         with self.lock:
             if self.custom_path:
-                model = mujoco.MjModel.from_xml_path(self.custom_path)
+                model = self._compile_imported()
             elif self.cad_xml:
                 model = mujoco.MjModel.from_xml_string(self.cad_xml)
             else:
@@ -136,7 +139,7 @@ class SimSession:
         else:
             xml = build_mjcf(self.params, self.obstacles)
         if self.accessories is None:
-            self.accessories = default_accessories(xml)
+            self.accessories = default_accessories(xml) if self.default_lidar else []
         xml, self.accessory_warnings = apply_accessories(xml, self.accessories)
         return xml
 
@@ -151,17 +154,16 @@ class SimSession:
     def accessories_info(self) -> dict:
         from ..models.accessories import TYPES, describe
         with self.lock:
-            items = describe(self.model, self.data, self.accessories or []) if not self.custom_path else []
+            items = describe(self.model, self.data, self.accessories or [])
         return {"types": {k: {"label": v["label"], "hint": v["hint"]} for k, v in TYPES.items()},
                 "items": items, "warnings": list(self.accessory_warnings),
-                "editable": not self.custom_path}
+                "editable": True, "default_lidar": self.default_lidar, "support_stand": self.support_stand,
+                "robot": self.robot_name, "lidar_mounted": self.lidar.mounted}
 
     def place_accessory(self, acc_type: str, geom: int, point, normal, snap: float = 0.01,
                         acc_id: str | None = None) -> dict:
         """Mount a new accessory (or move `acc_id`) where it was dropped on the robot, then rebuild."""
         from ..models.accessories import new_id, place
-        if self.custom_path:
-            raise ValueError("accessories can be mounted on the built-in robot only")
         with self.lock:
             items = list(self.accessories or [])
             old = next((a for a in items if a["id"] == acc_id), None) if acc_id else None
@@ -257,6 +259,12 @@ class SimSession:
                     return WalkController(m)
             except ImportError:
                 pass
+        if kind != "manual":
+            try:
+                from ..control.pd_hold import PDHoldController
+                return PDHoldController(m)  # imported robots: hold the stand pose
+            except ValueError:
+                pass
         return ManualController(m, self.manual_ctrl)
 
     def play_motion(self, motion: str | None, mode: str, policy: str | None = None) -> str:
@@ -321,24 +329,76 @@ class SimSession:
     def set_params(self, d: dict) -> None:
         with self.lock:
             self.params = HumanoidParams.from_dict({**self.params.to_dict(), **d})
+            if self.custom_path:
+                self.accessories, self.support_stand, self.robot_name = None, False, "builtin"
             self.custom_path = None
             self.cad_xml = None
             self.build()
 
-    def load_file(self, path: str) -> None:
+    def load_file(self, path: str, support_stand: bool = False, robot_name: str | None = None) -> None:
         p = Path(path).expanduser()
         if not p.is_file():
             raise FileNotFoundError(f"no such file: {p}")
         with self.lock:
-            old = self.custom_path
-            self.custom_path = str(p)
+            old = (self.custom_path, self.accessories, self.support_stand, self.robot_name)
+            self.custom_path, self.accessories = str(p), []   # imported robots start bare: place a lidar
+            self.support_stand, self.robot_name = bool(support_stand), robot_name or p.stem
+            self.policy, self.policy_name, self.rl_policy = None, "", None
+            if self.controller_kind in ("es-policy", "rl", "imitation", "motion-preview", "motion-pd", "walker", "mpc"):
+                self.controller_kind = "auto"
             try:
                 self.build()
             except Exception:
-                self.custom_path = old
+                self.custom_path, self.accessories, self.support_stand, self.robot_name = old
                 self.build()
                 raise
-            self.policy, self.policy_name = None, ""
+
+    def load_robot(self, name: str) -> str:
+        """Load a library robot (downloading it first if needed); returns a status message."""
+        from .. import robots
+        if name == "builtin":
+            self.set_params({})
+            return "built-in parametric humanoid"
+        info = robots.LIBRARY.get(name)
+        if info is None:
+            raise ValueError(f"unknown robot {name!r}")
+        path = robots.fetch(name)
+        # humanoids from the library have no balance controller here: start them on a support stand
+        self.load_file(str(path), support_stand=info["kind"] == "humanoid", robot_name=name)
+        return f"{info['label']} ({info['license']})"
+
+    def set_support_stand(self, on: bool) -> None:
+        with self.lock:
+            self.support_stand = bool(on)
+            self.build()
+
+    def set_default_lidar(self, on: bool) -> None:
+        """Built-in robot: start with the head lidar (on) or with no lidar at all (off)."""
+        with self.lock:
+            self.default_lidar = bool(on)
+            items = [a for a in (self.accessories or []) if a["id"] != "lidar"]
+            if on and not self.custom_path and not any(a["type"] == "lidar" for a in items):
+                from ..models.accessories import default_accessories
+                items = default_accessories(build_mjcf(self.params)) + items
+            self.accessories = items
+            self.cad_xml = None
+            self.build()
+            self.running = False
+
+    def _compile_imported(self) -> mujoco.MjModel:
+        """Imported MJCF/URDF compiled through MjSpec (assets resolve next to the file), with the mounted
+        accessories and, optionally, a support stand: a weld that holds the base where it starts."""
+        from ..models.accessories import apply_to_spec
+        spec = mujoco.MjSpec.from_file(self.custom_path)
+        self.accessory_warnings = apply_to_spec(spec, self.accessories or [])
+        if not self.support_stand:
+            return spec.compile()
+        base = spec.compile()
+        if base.njnt == 0 or base.jnt_type[0] != mujoco.mjtJoint.mjJNT_FREE:
+            return base
+        spec.add_equality(type=mujoco.mjtEq.mjEQ_WELD, objtype=mujoco.mjtObj.mjOBJ_BODY,
+                          name1=base.body(int(base.jnt_bodyid[0])).name, name="support_stand")
+        return spec.compile()
 
     def export_xml(self) -> str:
         if self.custom_path:
@@ -443,6 +503,11 @@ class SimSession:
                 "armature": float(m.dof_armature[dof]) if dof >= 0 else 0.0,
                 "ctrl": float(self.manual_ctrl[i]),
             })
+        c = self.controller
+        if getattr(c, "name", "") == "pd-hold":  # targets are joint angles held by the PD controller
+            for k, i in enumerate(c.act):
+                out[int(i)].update(ctrl=float(c.target[k]), lo=float(c.target_lo[k]), hi=float(c.target_hi[k]),
+                                   servo=True)
         return out
 
     def set_actuator(self, index: int, field: str, value: float) -> None:
@@ -471,6 +536,8 @@ class SimSession:
             elif field == "ctrl":
                 lo, hi = m.actuator_ctrlrange[i]
                 self.manual_ctrl[i] = np.clip(v, lo, hi) if m.actuator_ctrllimited[i] else v
+                if getattr(self.controller, "name", "") == "pd-hold":
+                    self.controller.set_target(i, v)
             else:
                 raise ValueError(f"unknown field {field}")
 
@@ -627,7 +694,10 @@ class SimSession:
 
     def _sensors(self, now: float) -> None:
         self.robot.serve_render_requests()  # camera / segmentation frames requested by AI pilots
-        if self.lidar_cfg.enabled and now - self._t_lidar >= 1.0 / self.lidar_cfg.rate_hz:
+        if not self.lidar.mounted and self.lidar_points is not None and len(self.lidar_points):
+            self.lidar_points = np.zeros((0, 3), np.float32)
+            self.lidar_seq += 1
+        if self.lidar.mounted and self.lidar_cfg.enabled and now - self._t_lidar >= 1.0 / self.lidar_cfg.rate_hz:
             self._t_lidar = now
             origin, pts, _, hit = self.lidar.scan(self.model, self.data)
             self.lidar_points = pts[hit].astype(np.float32)
@@ -636,7 +706,8 @@ class SimSession:
             if self.lidar_seq % 5 == 0:
                 self.map_seq += 1
         # SLAM runs on simulation time (10 Hz), so fast-forwarding does not stretch the motion between scans
-        if self.task is not None and self.lidar_cfg.enabled and self.data.time - self._slam_t >= 0.1 - 1e-9:
+        if (self.task is not None and self.lidar.mounted and self.lidar_cfg.enabled
+                and self.data.time - self._slam_t >= 0.1 - 1e-9):
             from ..plan.slam import planar_scan, root_pose
             self._slam_t = float(self.data.time)
             origin, pts, _, hit = self.lidar.scan(self.model, self.data)

@@ -42,19 +42,45 @@ class Lidar:
         own = mujoco.mj_name2id(model, mujoco.mjtObj.mjOBJ_GEOM, "floor") >= 0 and model.geom_group[
             mujoco.mj_name2id(model, mujoco.mjtObj.mjOBJ_GEOM, "floor")] == 2
         self.groups = np.array([0, 1, 1, 1, 1, 1], np.uint8) if own else None
+        # every geom of the robot itself (any body under the robot's root), whatever its group
+        root = model.body_rootid[robot_root_body] if model.nbody > robot_root_body else -1
+        self.robot_geom = model.body_rootid[model.geom_bodyid] == root
+
+    @property
+    def mounted(self) -> bool:
+        """False when the robot carries no lidar (no "lidar" site): scans then return no hits."""
+        return self.site >= 0
 
     def scan(self, model: mujoco.MjModel, data: mujoco.MjData):
         """Returns (origin (3,), points (n, 3) world, dist (n,), hit (n,) bool)."""
-        if self.site >= 0:
-            origin = data.site_xpos[self.site].copy()
-            rot = data.site_xmat[self.site].reshape(3, 3)
-        else:
-            origin = data.xpos[self.root] + np.array([0, 0, 0.5])
-            rot = data.xmat[self.root].reshape(3, 3)
+        if self.site < 0:
+            origin = data.xpos[self.root].copy()
+            dirs = self.local @ data.xmat[self.root].reshape(3, 3).T
+            dist = np.full(self.n, self.cfg.max_range)
+            return origin, origin + dirs * dist[:, None], dist, np.zeros(self.n, bool)
+        origin = data.site_xpos[self.site].copy()
+        rot = data.site_xmat[self.site].reshape(3, 3)
         dirs = self.local @ rot.T
         mujoco.mj_multiRay(model, data, origin, dirs.reshape(-1), self.groups, True,
                            -1 if self.groups is not None else self.root,
                            self._geomid, self._dist, None, self.n, self.cfg.max_range)
+        if self.groups is None:
+            # Imported robots: rays that hit the robot's own links are continued past that link
+            # (a real lidar sees past its mount only where it has a clear line of sight; this keeps
+            # the robot out of the map instead of modelling its occlusion exactly).
+            gid = np.empty(1, np.int32)
+            for _ in range(12):  # a ray may pass several limbs
+                own = np.flatnonzero((self._geomid >= 0) & self.robot_geom[np.maximum(self._geomid, 0)])
+                if own.size == 0:
+                    break
+                for i in own:
+                    start = origin + dirs[i] * (self._dist[i] + 1e-4)
+                    body = int(model.geom_bodyid[self._geomid[i]])
+                    d = mujoco.mj_ray(model, data, start, dirs[i], None, True, body, gid)
+                    if d >= 0:
+                        self._dist[i], self._geomid[i] = self._dist[i] + 1e-4 + d, gid[0]
+                    else:
+                        self._dist[i], self._geomid[i] = -1.0, -1
         # mj_multiRay's cutoff prunes geoms by bounding volume only, so far hits can still come back:
         # enforce the sensor's range here
         hit = (self._dist >= 0) & (self._dist <= self.cfg.max_range)

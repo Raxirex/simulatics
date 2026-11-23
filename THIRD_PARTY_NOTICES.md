@@ -49,7 +49,10 @@ compatible with all of it. Audited 2026-11-18 from the installed package metadat
 - No motion-capture datasets are included. If you import BVH files (for example LAFAN1, which is
   CC BY-NC-ND, or AMASS, which is research-only), their licences apply to them and to anything you derive
   from them.
-- Robots you import (for example from MuJoCo Menagerie) keep their own licences.
+- Robots you import (for example from MuJoCo Menagerie) keep their own licences. The robot library
+  (`simulatics/robots.py`) downloads models on demand and does not redistribute them; each downloaded
+  folder keeps its LICENSE: PNDbotics Adam Lite is MIT (Copyright (c) 2023 pndrobotics), Unitree Go2 is
+  BSD-3-Clause (Copyright (c) 2016-2022 Unitree Robotics).
 
 ## Cited papers
 

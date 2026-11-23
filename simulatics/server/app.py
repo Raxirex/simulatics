@@ -440,6 +440,29 @@ def create_app() -> FastAPI:
         sess.unload_policy()
         return {"ok": True}
 
+    # ---- robot library ------------------------------------------------------
+    @app.get("/api/robots")
+    def robots_list():
+        from .. import robots
+        return {"robots": robots.status(), "current": sess.robot_name}
+
+    @app.post("/api/robots/load")
+    def robots_load(d: dict = Body(...)):
+        msg = guard(sess.load_robot, str(d.get("name", "builtin")))  # downloads on first use (may take a while)
+        state["cad"] = None
+        return {**full_state(), "message": msg, **sess.accessories_info()}
+
+    @app.post("/api/robots/support")
+    def robots_support(d: dict = Body(...)):
+        guard(sess.set_support_stand, bool(d.get("on")))
+        return {**full_state(), **sess.accessories_info()}
+
+    @app.post("/api/accessories/default_lidar")
+    def accessories_default_lidar(d: dict = Body(...)):
+        guard(sess.set_default_lidar, bool(d.get("on")))
+        state["cad"] = None
+        return _finite({**sess.accessories_info(), **full_state()})
+
     # ---- workshop: accessories ---------------------------------------------
     @app.post("/api/workshop")
     def workshop(d: dict = Body(...)):

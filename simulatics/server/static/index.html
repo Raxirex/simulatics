@@ -62,6 +62,14 @@
         <button id="defaults">Reset to defaults</button>
         <a class="button" href="/api/model/export" download="humanoid.xml">Export MJCF</a>
       </div>
+      <h3>Robot</h3>
+      <p class="hint">Library robots come from MuJoCo Menagerie and download on first use (with their own licence files). They hold their stand pose; the built-in humanoid is the one that walks.</p>
+      <div class="row">
+        <label>Robot <select id="rb-name"></select></label>
+        <button id="rb-load" class="primary">Load</button>
+      </div>
+      <label class="check"><input type="checkbox" id="rb-stand"> Support stand (holds the base in place, like a gantry)</label>
+      <div class="info" id="rb-info"></div>
       <h3>Import a robot</h3>
       <p class="hint">Path to an MJCF or URDF file on this computer, for example a Unitree G1 scene from MuJoCo Menagerie.</p>
       <input type="text" id="model-path" placeholder="C:\path\to\scene.xml">
@@ -78,6 +86,8 @@
           <option value="0.02">2 cm</option><option value="0.05">5 cm</option></select></label>
         <label class="check"><input type="checkbox" id="ws-grid" checked> Coordinate backdrop</label>
       </div>
+      <label class="check"><input type="checkbox" id="ws-deflidar" checked> Default head lidar (built-in robot)</label>
+      <div class="info" id="ws-lidarnote"></div>
       <div class="row"><button data-view="front">Front</button><button data-view="side">Side</button><button data-view="back">Back</button><button data-view="top">Top</button></div>
       <div class="info" id="ws-hover">Point at the robot to read coordinates.</div>
       <h3>Mounted</h3>

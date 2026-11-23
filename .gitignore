@@ -19,3 +19,4 @@ runs/rl_walker/*
 !runs/rl_walker/*.py
 MUJOCO_LOG.TXT
 .claude/
+robots/

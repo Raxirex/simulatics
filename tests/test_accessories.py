@@ -85,3 +85,40 @@ def test_session_moves_the_lidar_and_robot_still_walks(sess):
     assert sess.nav.state == "reached" and sess.falls == 0
     sess.delete_accessory(cam["id"])
     assert all(a["id"] != cam["id"] for a in sess.accessories)
+
+
+def test_default_lidar_setting_removes_and_restores_the_head_lidar(sess):
+    sess.set_default_lidar(False)
+    assert not sess.lidar.mounted and not any(a["type"] == "lidar" for a in sess.accessories)
+    sess.set_params({"thigh_length": 0.42})            # survives rebuilds
+    assert not sess.lidar.mounted
+    with sess.lock:
+        o, pts, dist, hit = sess.lidar.scan(sess.model, sess.data)
+    assert not hit.any()                                  # no lidar, no returns
+    sess.set_default_lidar(True)
+    assert sess.lidar.mounted and [a["type"] for a in sess.accessories].count("lidar") == 1
+
+
+@pytest.mark.parametrize("name,stand", [("go2", False), ("adam_lite", True)])
+def test_library_robot_holds_its_pose_and_takes_a_lidar(sess, name, stand):
+    from simulatics import robots
+    if not robots.available(name):
+        pytest.skip(f"{name} not downloaded (python -m simulatics.robots fetch {name})")
+    sess.load_robot(name)
+    assert sess.controller.name == "pd-hold" and sess.support_stand == stand and not sess.lidar.mounted
+    with sess.lock:
+        z0 = float(sess.data.qpos[2]); sess.running = True; t0 = sess.data.time
+    assert wait_for(lambda: sess.data.time > t0 + 3.0, 60)
+    with sess.lock:
+        R = sess.data.xmat[1].reshape(3, 3)
+        assert abs(float(sess.data.qpos[2]) - z0) < 0.05 and R[2, 2] > 0.98 and sess.falls == 0   # still standing
+    sess.workshop(True)
+    with sess.lock:
+        g = next(g for g in range(sess.model.ngeom) if sess.model.geom_bodyid[g] == 1)
+        top = (sess.data.xpos[1] + np.array([0, 0, 0.15])).tolist()
+    sess.place_accessory("lidar", g, top, [0, 0, 1], 0.01)
+    with sess.lock:
+        o, pts, dist, hit = sess.lidar.scan(sess.model, sess.data)
+        gid = sess.lidar._geomid
+        assert sess.lidar.mounted and hit.sum() > 100
+        assert not (hit & (gid >= 0) & sess.lidar.robot_geom[np.maximum(gid, 0)]).any()   # never sees itself

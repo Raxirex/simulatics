@@ -125,7 +125,8 @@ function buildScene(s) {
   const meshGeos = {};
   for (const [id, m] of Object.entries(s.meshes)) meshGeos[id] = meshGeometry(m);
   // When CAD visual meshes (group 3) exist, show them instead of the robot's collision primitives.
-  hasCadVisuals = s.geoms.some(g => g.group === 3 && g.type === 'mesh');
+  hasCadVisuals = !s.info.custom && s.geoms.some(g => g.group === 3 && g.type === 'mesh');
+  const hideCollision = !!s.info.custom;   // Menagerie convention: visuals in group 2, collision in group 3
   for (const g of s.geoms) {
     const [a, b, c] = g.size; let geo = null;
     switch (g.type) {
@@ -139,7 +140,7 @@ function buildScene(s) {
     }
     const hiddenPrimitive = hasCadVisuals && g.robot && g.group === 0 && g.type !== 'mesh' && !/foot|finger|pad/.test(g.name);
     let mesh;
-    if (!geo || g.rgba[3] === 0 || g.group > 3 || hiddenPrimitive) { mesh = new THREE.Object3D(); }
+    if (!geo || g.rgba[3] === 0 || g.group > 3 || hiddenPrimitive || (hideCollision && g.group === 3 && g.robot)) { mesh = new THREE.Object3D(); }
     else if (g.type === 'plane') {
       mesh = new THREE.Mesh(geo, new THREE.MeshStandardMaterial({ color: 0x20242b, roughness: 1 }));
       mesh.receiveShadow = true; floorMesh = mesh;
@@ -569,6 +570,28 @@ function wire(s) {
   });
   $('ros-disconnect').addEventListener('click', async () => showRos(await api('/api/ros/disconnect', {})));
 
+  // robot library
+  const showRobots = async () => {
+    const r = await api('/api/robots'); const sel = $('rb-name'); sel.innerHTML = '';
+    sel.add(new Option('Built-in parametric humanoid (walks)', 'builtin'));
+    for (const x of r.robots) sel.add(new Option(`${x.label} - ${x.license}${x.downloaded ? '' : ` (download ~${x.size_mb} MB)`}`, x.name));
+    sel.value = r.current;
+    const x = r.robots.find(y => y.name === r.current);
+    $('rb-info').textContent = x ? `Loaded: ${x.label}. Licence ${x.license}; files in robots/${x.name}/ (LICENSE, SOURCE.txt).` : 'Loaded: built-in humanoid.';
+  };
+  showRobots().catch(() => {});
+  $('rb-load').addEventListener('click', async () => {
+    const name = $('rb-name').value;
+    $('rb-info').textContent = name === 'builtin' ? 'loading...' : 'loading (downloading first if needed, this can take a minute)...';
+    const r = await api('/api/robots/load', { name });
+    applyState(r); $('rb-stand').checked = !!r.support_stand; toast(r.message, true); showRobots();
+    if (ws.on) { renderAccessories(r); setTimeout(() => { setView('front'); buildBackdrop(); }, 300); }
+  });
+  $('rb-stand').addEventListener('change', async (e) => { const r = await api('/api/robots/support', { on: e.target.checked }); applyState(r); });
+  $('ws-deflidar').addEventListener('change', async (e) => {
+    const r = await api('/api/accessories/default_lidar', { on: e.target.checked }); applyState(r); renderAccessories(r);
+  });
+
   // workshop
   document.querySelectorAll('[data-view]').forEach(b => b.addEventListener('click', () => setView(b.dataset.view)));
   $('ws-grid').addEventListener('change', (e) => { if (ws.backdrop) ws.backdrop.visible = e.target.checked; });
@@ -725,7 +748,7 @@ function buildBackdrop() {
   grp.visible = $('ws-grid').checked; ws.backdrop = grp; scene.add(grp);
 }
 function setView(kind) {
-  const t = new THREE.Vector3(rootPos.x, rootPos.y, 0.85), d = 2.8;
+  const h = Math.max(0.25, rootPos.z), t = new THREE.Vector3(rootPos.x, rootPos.y, 0.75 * h), d = Math.max(1.1, 2.5 * h);
   const off = { front: [d, 0, 0.2], side: [0, -d, 0.2], back: [-d, 0, 0.2], top: [0.01, 0, d] }[kind] || [d, 0, 0.2];
   controls.target.copy(t); camera.position.set(t.x + off[0], t.y + off[1], t.z + off[2]); controls.update();
 }
@@ -813,6 +836,9 @@ function renderAccessories(info) {
     list.append(row);
   }
   $('ws-warn').textContent = (info.warnings || []).join('\n');
+  if (info.default_lidar != null) $('ws-deflidar').checked = info.default_lidar;
+  $('ws-deflidar').disabled = !!info.robot && info.robot !== 'builtin';
+  $('ws-lidarnote').textContent = info.lidar_mounted === false ? 'No lidar mounted: drag the Lidar from the palette onto the robot to add one.' : '';
   highlightAccessory();
 }
 // drop from the palette
