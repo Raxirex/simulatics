@@ -679,8 +679,8 @@ class SimSession:
                 d.xfrc_applied[root, :3] = 0.0
                 self._push = None
         mujoco.mj_step(m, d, max(1, int(round(c.control_dt / m.opt.timestep))))
-        if task is None or isinstance(c, ManualController):
-            return
+        if task is None or isinstance(c, ManualController) or getattr(c, "name", "") == "motion-preview":
+            return      # a kinematic preview cannot fall (flips and handstands are upside down on purpose)
         _, up = LocoTask.yaw_up(d.qpos[None])
         fallen = (d.qpos[2] < task.cfg.min_height_frac * task.z0 or up[0, 2] < task.cfg.min_up
                   or not np.isfinite(d.qpos).all())

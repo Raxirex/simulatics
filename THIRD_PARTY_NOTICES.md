@@ -1,6 +1,6 @@
 # Third-party software
 
-Simulatics is MIT-licensed (see `LICENSE`). It does not bundle any third-party code: the packages below are
+Simulatics is MIT-licensed (see `LICENSE`), except the motion-capture clips described below. The source tree does not bundle any third-party code: the packages below are
 installed separately by `pip` from their own distributions, under their own licences, and three.js is loaded
 by the browser from a CDN. This file records what the project depends on and why the MIT licence is
 compatible with all of it. Audited 2026-11-18 from the installed package metadata.
@@ -54,6 +54,22 @@ compatible with all of it. Audited 2026-11-18 from the installed package metadat
   (`simulatics/robots.py`) downloads models on demand and does not redistribute them; each downloaded
   folder keeps its LICENSE: PNDbotics Adam Lite is MIT (Copyright (c) 2023 pndrobotics), Unitree Go2 is
   BSD-3-Clause (Copyright (c) 2016-2022 Unitree Robotics).
+
+## Motion-capture data (not MIT)
+
+`simulatics/samples/data/*.npz` (the acrobatics and parkour reference clips) are derived from the CMU Graphics
+Lab Motion Capture Database and remain under its terms, not this project's MIT licence: free for all uses,
+may be copied, modified, redistributed and included in commercial products, but the motion data itself may
+not be resold directly, even in converted form. Acknowledgment: the data used in this project was obtained
+from mocap.cs.cmu.edu; the database was created with funding from NSF EIA-0196217. BVH conversion by Bruce
+Hahne (cgspeed.com). Takes used and what was changed: `simulatics/samples/data/SOURCES.md`.
+
+## Packaged app
+
+`SimulaticsStudio.exe` (built by `scripts/build_exe.ps1` or the release workflow with PyInstaller, GPL-2.0 with
+an exception that allows distributing the built app under any licence) bundles the runtime dependencies listed
+above, including Qt for Python (LGPL-3.0). To use a different Qt build with it, rebuild from this source,
+which is the route the LGPL asks to be kept open.
 
 ## Cited papers
 

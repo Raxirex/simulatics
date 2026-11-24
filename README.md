@@ -6,7 +6,14 @@ stairs and ramps, recovering from pushes), use its arms and hands, give it a lid
 with SLAM, connect it to ROS 2, train walking and motion-imitation policies with methods from the published
 literature, and let a language model pilot it from camera images.
 
-MIT-licensed; see `LICENSE` and `THIRD_PARTY_NOTICES.md`.
+> **Independent project.** Simulatics is a standalone personal project. It is not affiliated with, sponsored
+> by or endorsed by any university, company or other software project. Third-party names appear only where
+> needed to say what Simulatics works with or to credit work as its licence requires, and they belong to
+> their owners. All third-party software and data are used under, and in line with, their own licences. See
+> [Disclaimer](#disclaimer).
+
+Released under the MIT License, except the motion-capture sample clips, which keep their own terms; see `LICENSE` and
+`THIRD_PARTY_NOTICES.md`.
 
 Python for the application, MuJoCo's C engine for physics, C++ kernels for planning, mapping, batched
 inference, SLAM scan matching, MPC and topology optimisation. Two front ends share the engine: a native
@@ -56,6 +63,39 @@ results = G.Executor().run(g)
 Not in Studio yet (use the browser GUI for these): the CAD and topology-optimisation views, the ROS 2 bridge
 panel, arm and hand commands (reach, grasp, gestures), importing motion-capture files, navigating on the SLAM
 map, and the training task settings. Design search is available as a graph node only.
+
+### Download
+
+A ready-built Windows app is attached to each release: download `SimulaticsStudio.exe` from
+https://github.com/Raxirex/simulatics/releases and run it (no Python needed; about 200 MB, and the first start
+takes several seconds while it unpacks). It keeps trained policies and its log in `Documents\Simulatics`.
+Windows may warn that the file is from an unknown publisher, because it is not code-signed.
+
+Build it yourself from a checkout (the equivalent of `make`):
+
+```powershell
+powershell -ExecutionPolicy Bypass -File scripts\build_exe.ps1
+```
+
+Pushing a tag such as `v0.4.0` makes GitHub build the exe and publish the release
+(`.github/workflows/release.yml`).
+
+### Samples
+
+Samples menu in Studio (or the Samples list in the Assets panel), and from Python
+`samples.run(session, "backflip")`. There are two kinds, and each sample says which it is:
+
+| Kind | Samples | What you are looking at |
+|---|---|---|
+| Physics | Stand and balance, Stand through pushes, Wave with one hand, Walk forward, Walk from point to point, Walk around obstacles, Climb stairs | The robot's own controllers in the physics simulation |
+| Reference motion | Backflip, Front flip, Front handspring, Stand on one hand, Handstand, Cartwheel, Jump onto a box, Jump down from a box, Jump a hurdle, Vertical jump, Broad jump | A human motion-capture take retargeted to the robot and played back pose by pose |
+
+The reference motions are **not** physically simulated: the robot's controllers cannot flip or jump. They are
+there to look at and as targets for training a motion-tracking policy (Training panel, method "Motion
+imitation"). The boxes and the hurdle are placed from the take itself, where the performer's feet rested or
+cleared. The source database has no clean front flip, so that sample is the backflip reversed in time, next to
+a front handspring in which the hands touch down. The clips come from the CMU motion-capture database and keep
+its terms rather than MIT (`simulatics/samples/data/SOURCES.md`).
 
 ## Run it (browser GUI)
 
@@ -173,6 +213,7 @@ simulatics/
   robots.py                robot library (Menagerie downloads, pinned commit)
   jobs.py                  training jobs shared by the browser GUI, Studio and graph nodes
   graph/                   node-graph engine (no Qt): typed ports, caching executor, built-in nodes
+  samples/                 ready-made samples: physics set-ups and retargeted motion-capture clips
   studio/                  desktop workstation (PySide6): docking, viewport, tools, node editor
   bridge/                  ROS 2 bridge (rosbridge v2 client, rclpy backend, mock server)
   sim/                     locomotion tasks, vectorised environments, sensors, scenes and props

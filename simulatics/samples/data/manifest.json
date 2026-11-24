@@ -1,0 +1,244 @@
+{
+ "backflip": {
+  "file": "backflip.npz",
+  "title": "Backflip",
+  "group": "Acrobatics",
+  "description": "A standing back somersault: jump, tuck, a full turn backwards, land on both feet.",
+  "source": "CMU Graphics Lab Motion Capture Database (mocap.cs.cmu.edu), subject 88 trial 1",
+  "url": "https://raw.githubusercontent.com/una-dinosauria/cmu-mocap/master/data/088/88_01.bvh",
+  "frames": null,
+  "duration_s": 3.36,
+  "speed": 1.0,
+  "props": [],
+  "retarget_error_m": 0.0742,
+  "arm_frames_adjusted": 0,
+  "snaps_blended": 3
+ },
+ "front_flip": {
+  "file": "front_flip.npz",
+  "title": "Front flip (reversed backflip)",
+  "group": "Acrobatics",
+  "description": "A forward somersault. No clean front flip exists in the source database, so this is the backflip take played backwards: time-reversed flight is still a valid ballistic flight.",
+  "source": "CMU Graphics Lab Motion Capture Database (mocap.cs.cmu.edu), subject 88 trial 1",
+  "url": "https://raw.githubusercontent.com/una-dinosauria/cmu-mocap/master/data/088/88_01.bvh",
+  "frames": null,
+  "duration_s": 3.36,
+  "speed": 1.0,
+  "props": [],
+  "retarget_error_m": 0.0742,
+  "arm_frames_adjusted": 0,
+  "snaps_blended": 3
+ },
+ "front_handspring": {
+  "file": "front_handspring.npz",
+  "title": "Front handspring",
+  "group": "Acrobatics",
+  "description": "A running forward flip over the hands: the hands touch down briefly, then the feet land.",
+  "source": "CMU Graphics Lab Motion Capture Database (mocap.cs.cmu.edu), subject 90 trial 11",
+  "url": "https://raw.githubusercontent.com/una-dinosauria/cmu-mocap/master/data/090/90_11.bvh",
+  "frames": null,
+  "duration_s": 1.48,
+  "speed": 1.0,
+  "props": [],
+  "retarget_error_m": 0.091,
+  "arm_frames_adjusted": 0,
+  "snaps_blended": 6
+ },
+ "one_hand_stand": {
+  "file": "one_hand_stand.npz",
+  "title": "Stand on one hand",
+  "group": "Acrobatics",
+  "description": "Kicks up and holds the whole body on one planted hand for about a second and a half, then comes back to standing.",
+  "source": "CMU Graphics Lab Motion Capture Database (mocap.cs.cmu.edu), subject 89 trial 3",
+  "url": "https://raw.githubusercontent.com/una-dinosauria/cmu-mocap/master/data/089/89_03.bvh",
+  "frames": null,
+  "duration_s": 4.52,
+  "speed": 1.0,
+  "props": [],
+  "retarget_error_m": 0.1386,
+  "arm_frames_adjusted": 0,
+  "snaps_blended": 6
+ },
+ "handstand": {
+  "file": "handstand.npz",
+  "title": "Handstand",
+  "group": "Acrobatics",
+  "description": "A handstand with leg kicks. The robot has shorter arms than the performer, so its head comes down to the floor.",
+  "source": "CMU Graphics Lab Motion Capture Database (mocap.cs.cmu.edu), subject 85 trial 5",
+  "url": "https://raw.githubusercontent.com/una-dinosauria/cmu-mocap/master/data/085/85_05.bvh",
+  "frames": [
+   400,
+   900
+  ],
+  "duration_s": 4.16,
+  "speed": 1.0,
+  "props": [],
+  "retarget_error_m": 0.0564,
+  "arm_frames_adjusted": 3,
+  "snaps_blended": 0
+ },
+ "cartwheel": {
+  "file": "cartwheel.npz",
+  "title": "Cartwheel",
+  "group": "Acrobatics",
+  "description": "One cartwheel.",
+  "source": "CMU Graphics Lab Motion Capture Database (mocap.cs.cmu.edu), subject 88 trial 7",
+  "url": "https://raw.githubusercontent.com/una-dinosauria/cmu-mocap/master/data/088/88_07.bvh",
+  "frames": null,
+  "duration_s": 2.58,
+  "speed": 1.0,
+  "props": [],
+  "retarget_error_m": 0.0674,
+  "arm_frames_adjusted": 0,
+  "snaps_blended": 0
+ },
+ "box_jump_up": {
+  "file": "box_jump_up.npz",
+  "title": "Jump onto a box",
+  "group": "Parkour",
+  "description": "A two-foot standing jump onto a platform about knee to hip high.",
+  "source": "CMU Graphics Lab Motion Capture Database (mocap.cs.cmu.edu), subject 88 trial 2",
+  "url": "https://raw.githubusercontent.com/una-dinosauria/cmu-mocap/master/data/088/88_02.bvh",
+  "frames": [
+   96,
+   200
+  ],
+  "duration_s": 1.72,
+  "speed": 1.0,
+  "props": [
+   {
+    "name": "box 1",
+    "kind": "terrain",
+    "shape": "box",
+    "colour": "wood",
+    "rgba": [
+     0.72,
+     0.55,
+     0.36,
+     1.0
+    ],
+    "pos": [
+     0.6048365630097022,
+     0.019060833187570764
+    ],
+    "yaw": 0.0,
+    "size": [
+     0.2767962884214187,
+     0.2522096493987178,
+     0.3386466210066851
+    ]
+   }
+  ],
+  "retarget_error_m": 0.0436,
+  "arm_frames_adjusted": 0,
+  "snaps_blended": 0
+ },
+ "box_jump_down": {
+  "file": "box_jump_down.npz",
+  "title": "Jump down from a box",
+  "group": "Parkour",
+  "description": "Steps off a ledge and lands in a deep squat.",
+  "source": "CMU Graphics Lab Motion Capture Database (mocap.cs.cmu.edu), subject 82 trial 4",
+  "url": "https://raw.githubusercontent.com/una-dinosauria/cmu-mocap/master/data/082/82_04.bvh",
+  "frames": [
+   150,
+   420
+  ],
+  "duration_s": 2.24,
+  "speed": 1.0,
+  "props": [
+   {
+    "name": "box 1",
+    "kind": "terrain",
+    "shape": "box",
+    "colour": "wood",
+    "rgba": [
+     0.72,
+     0.55,
+     0.36,
+     1.0
+    ],
+    "pos": [
+     -0.067095937694771,
+     -0.016044181576071792
+    ],
+    "yaw": 0.0,
+    "size": [
+     0.24009279322511157,
+     0.27615836707214375,
+     0.41047409925601475
+    ]
+   }
+  ],
+  "retarget_error_m": 0.0575,
+  "arm_frames_adjusted": 0,
+  "snaps_blended": 3
+ },
+ "hurdle": {
+  "file": "hurdle.npz",
+  "title": "Jump a hurdle",
+  "group": "Parkour",
+  "description": "A running jump clearing an obstacle.",
+  "source": "CMU Graphics Lab Motion Capture Database (mocap.cs.cmu.edu), subject 127 trial 25",
+  "url": "https://raw.githubusercontent.com/una-dinosauria/cmu-mocap/master/data/127/127_25.bvh",
+  "frames": null,
+  "duration_s": 1.9,
+  "speed": 1.0,
+  "props": [
+   {
+    "name": "hurdle 1",
+    "shape": "box",
+    "colour": "orange",
+    "rgba": [
+     0.95,
+     0.55,
+     0.15,
+     1.0
+    ],
+    "pos": [
+     2.330510460745683,
+     -0.15360093763284008
+    ],
+    "yaw": 0.031193178970844733,
+    "size": [
+     0.02,
+     0.6,
+     0.2880680643116115
+    ]
+   }
+  ],
+  "retarget_error_m": 0.0502,
+  "arm_frames_adjusted": 0,
+  "snaps_blended": 0
+ },
+ "vertical_jump": {
+  "file": "vertical_jump.npz",
+  "title": "Vertical jump",
+  "group": "Parkour",
+  "description": "A high jump on the spot.",
+  "source": "CMU Graphics Lab Motion Capture Database (mocap.cs.cmu.edu), subject 16 trial 3",
+  "url": "https://raw.githubusercontent.com/una-dinosauria/cmu-mocap/master/data/016/16_03.bvh",
+  "frames": null,
+  "duration_s": 3.4,
+  "speed": 1.0,
+  "props": [],
+  "retarget_error_m": 0.0424,
+  "arm_frames_adjusted": 0,
+  "snaps_blended": 0
+ },
+ "broad_jump": {
+  "file": "broad_jump.npz",
+  "title": "Broad jump",
+  "group": "Parkour",
+  "description": "A standing jump forwards.",
+  "source": "CMU Graphics Lab Motion Capture Database (mocap.cs.cmu.edu), subject 13 trial 11",
+  "url": "https://raw.githubusercontent.com/una-dinosauria/cmu-mocap/master/data/013/13_11.bvh",
+  "frames": null,
+  "duration_s": 3.44,
+  "speed": 1.0,
+  "props": [],
+  "retarget_error_m": 0.0483,
+  "arm_frames_adjusted": 0,
+  "snaps_blended": 0
+ }
+}

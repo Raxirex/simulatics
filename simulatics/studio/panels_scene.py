@@ -542,6 +542,20 @@ class AssetsPanel(QWidget):
         outer.setContentsMargins(0, 0, 0, 0)
         outer.addWidget(_scroll(inner))
 
+        from .. import samples
+        lay.addWidget(heading("Samples"))
+        self.samples = QListWidget()
+        self.samples.setMaximumHeight(170)
+        for sm in samples.SAMPLES.values():
+            it = QListWidgetItem(f"{sm.title}" + ("" if sm.kind == "physics" else "   (reference motion)"))
+            it.setData(Qt.UserRole, sm.id)
+            it.setToolTip(sm.description + (("\n" + "Source: " + sm.source) if sm.source else ""))
+            self.samples.addItem(it)
+        self.samples.itemDoubleClicked.connect(lambda it: self.studio.run_sample(it.data(Qt.UserRole)))
+        lay.addWidget(self.samples)
+        lay.addWidget(dim("Double-click to run. Physics samples are simulated; reference motions are motion-capture "
+                          "clips played back on the robot."))
+
         lay.addWidget(heading("World"))
         from PySide6.QtWidgets import QGridLayout
         grid = QGridLayout()

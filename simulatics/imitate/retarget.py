@@ -604,6 +604,13 @@ def retarget_human(human: HumanMotion, model: mujoco.MjModel, cfg: RetargetConfi
     names0: list[str] = []
     norms = []
     for t in range(T):
+        if t > 0:
+            # Start from the last pose carried along with the performer's pelvis (its translation and its
+            # rotation since the previous frame). Without this a fast whole-body rotation (a flip, a
+            # cartwheel) outruns the warm-started solver, which lags behind and then snaps back.
+            dR = tgt["pelvis_ori"][t] @ tgt["pelvis_ori"][t - 1].T
+            q[qa:qa + 3] = tgt["pelvis"][t] + dR @ (q[qa:qa + 3] - tgt["pelvis"][t - 1])
+            q[qa + 3:qa + 7] = mat_to_quat(dR @ quat_to_mat(q[qa + 3:qa + 7]))
         q, nrm = ik.solve(q, tasks_at(t), cfg.first_iters if t == 0 else cfg.iters)
         qs[t] = q
         norms.append(nrm)

@@ -75,6 +75,9 @@ def load_motion(name_or_path: str | Path) -> Motion:
     lib = library_path(str(name_or_path))
     if lib.exists():
         return Motion.load(lib)
+    sample = Path(__file__).resolve().parent.parent / "samples" / "data" / f"{name_or_path}.npz"
+    if sample.exists():          # a motion-capture reference clip (simulatics/samples), e.g. "backflip"
+        return Motion.load(sample)
     raise FileNotFoundError(f"no motion {name_or_path!r} (library clips: {', '.join(CLIPS)})")
 
 

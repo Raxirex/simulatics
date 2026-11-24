@@ -1,6 +1,8 @@
 """The Studio window: dockable panels around a 3D viewport, a tool bar, menus and saved workspaces."""
 from __future__ import annotations
 
+import os
+import sys
 import threading
 
 from PySide6.QtCore import QByteArray, QObject, QSettings, QSize, Qt, QTimer, Signal
@@ -198,6 +200,18 @@ class StudioWindow(QMainWindow):
         for name in G.EXAMPLES:
             sub.addAction(self._act(name, lambda name=name: (self.apply_workspace("Graph"), self.graph_panel.load_example(name))))
 
+        from .. import samples
+        m = mb.addMenu("Sa&mples")
+        m.setToolTipsVisible(True)
+        groups: dict[str, object] = {}
+        for sm in samples.SAMPLES.values():
+            sub = groups.get(sm.group) or groups.setdefault(sm.group, m.addMenu(sm.group))
+            sub.setToolTipsVisible(True)
+            a = self._act(sm.title + ("" if sm.kind == "physics" else "   (reference motion)"),
+                          lambda sid=sm.id: self.run_sample(sid))
+            a.setToolTip(sm.description + (("\n" + "Source: " + sm.source) if sm.source else ""))
+            sub.addAction(a)
+
         m = mb.addMenu("&Help")
         m.addAction(self._act("Shortcuts", self._shortcuts))
         m.addAction(self._act("About", self._about))
@@ -340,6 +354,18 @@ class StudioWindow(QMainWindow):
         self.sess.workshop(True)
         self.viewport.set_tool("place")
         self.say(f"Click the robot to mount the {acc_type}. The simulation is paused while you place things.")
+
+    def run_sample(self, sample_id: str) -> None:
+        from .. import samples
+        try:
+            self.log(samples.run(self.sess, sample_id))
+        except Exception as e:  # noqa: BLE001
+            self.log(f"Could not start that sample: {e}")
+        self.timeline.rec.clear()
+        self.scene_changed()
+        self.viewport.set_camera("Follow")
+        self.viewport.frame_robot()
+        self._fill_cameras()
 
     def scene_changed(self, light: bool = False) -> None:
         """Something rebuilt or reconfigured the model: bring every panel back in line."""
@@ -565,6 +591,13 @@ class StudioWindow(QMainWindow):
         st.setValue("window/geometry", self.saveGeometry())
         st.setValue("window/state", self.saveState())
         st.setValue("window/version", __version__)
+        st.sync()
+        if getattr(sys, "frozen", False):
+            # Packaged build: everything worth keeping is saved; leave without tearing down Qt, OpenGL and the
+            # simulation thread, which crashes on exit there.
+            if self.train.trainer is not None and self.train.job_state() == "running":
+                self.train.trainer.stop()
+            os._exit(0)
         self._timer.stop()
         self.viewport._timer.stop()
         self.graph_panel.close()
