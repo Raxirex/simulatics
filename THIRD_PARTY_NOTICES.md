@@ -34,6 +34,7 @@ compatible with all of it. Audited 2026-11-18 from the installed package metadat
 |---|---|---|
 | build123d, cadquery-ocp (`pip install .[step]`) | Apache-2.0 bindings around OpenCASCADE, which is LGPL-2.1 with the OCCT exception | only for STEP export; used as an unmodified, separately installed library |
 | ROS 2 / rclpy | Apache-2.0 | only if you run the ROS 2 bridge in native mode on a machine with ROS 2 installed |
+| PySide6-Essentials, shiboken6 (`pip install .[studio]`) | LGPL-3.0 (Qt for Python; Qt itself LGPL-3.0) | only for Simulatics Studio; used as an unmodified, separately installed library, which the LGPL permits from MIT code |
 | pytest | MIT | tests |
 
 ## Browser

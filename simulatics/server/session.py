@@ -719,8 +719,11 @@ class SimSession:
             del self.slam_true[:-4000]
             if self.slam.scans % 5 == 0 and self.nav_on_slam:
                 self.map_seq += 1
-        if self.camera_cfg["enabled"] and now - self._t_cam >= 0.1:
+        # at most 10 Hz, and never more than a quarter of the loop's time (heavy meshes render slowly, and
+        # rendering holds the simulation)
+        if self.camera_cfg["enabled"] and now - self._t_cam >= max(0.1, 4.0 * getattr(self, "_cam_cost", 0.0)):
             self._t_cam = now
+            t_render = time.perf_counter()
             try:
                 if self._rig is None or self._rig_version != self.scene_version:
                     if self._rig:
@@ -731,6 +734,7 @@ class SimSession:
                 self.camera_jpeg = self._rig.jpeg(self.data, cam, self.camera_cfg["depth"])
                 self.camera_seq += 1
                 self.camera_error = ""
+                self._cam_cost = time.perf_counter() - t_render
             except Exception as e:
                 self.camera_error = f"{type(e).__name__}: {e}"
                 self.camera_cfg["enabled"] = False

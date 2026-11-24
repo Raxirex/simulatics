@@ -66,6 +66,11 @@ def cmd_build(a) -> None:
     raise SystemExit(0 if ok else 1)
 
 
+def cmd_studio(a) -> None:
+    from .studio.app import main as studio_main
+    raise SystemExit(studio_main(["simulatics-studio"]))
+
+
 def main() -> None:
     p = argparse.ArgumentParser(prog="simulatics")
     sub = p.add_subparsers(dest="cmd")
@@ -74,6 +79,8 @@ def main() -> None:
     g.add_argument("--port", type=int, default=8765)
     g.add_argument("--no-browser", action="store_true")
     g.set_defaults(fn=cmd_gui)
+    st = sub.add_parser("studio", help="start the desktop workstation (needs PySide6: pip install .[studio])")
+    st.set_defaults(fn=cmd_studio)
     t = sub.add_parser("train", help="headless evolutionary training")
     t.add_argument("--algo", default="es", choices=["es", "ga"])
     t.add_argument("--population", type=int, default=256)

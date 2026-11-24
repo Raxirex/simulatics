@@ -9,11 +9,55 @@ literature, and let a language model pilot it from camera images.
 MIT-licensed; see `LICENSE` and `THIRD_PARTY_NOTICES.md`.
 
 Python for the application, MuJoCo's C engine for physics, C++ kernels for planning, mapping, batched
-inference, SLAM scan matching, MPC and topology optimisation, and a browser GUI served from the local machine.
+inference, SLAM scan matching, MPC and topology optimisation. Two front ends share the engine: a native
+desktop workstation (Simulatics Studio, Qt) and a browser GUI served from the local machine.
 
 `docs/METHODS.md` maps each method from the literature, with its paper, to the module that implements it.
 
-## Run it
+## Simulatics Studio (desktop workstation)
+
+![Simulatics Studio: a node graph that loads the robot, adds obstacles, walks it to a goal and plots the path](docs/images/studio_graph.png)
+
+A native desktop app with dockable panels around a 3D viewport and a node graph, built on the same engine as
+the browser GUI:
+
+```bash
+.venv\Scripts\python.exe -m pip install -e .[studio]
+```
+```bash
+.venv\Scripts\python.exe -m simulatics studio
+```
+
+- **Dockable panels.** Viewport, Outliner, Inspector, Robot, Motors, Assets, Timeline, Node Graph, Results,
+  Training, Sensors, AI Pilot, Python and Log can each be dragged, tabbed, floated or closed. Five workspaces
+  (Layout, Graph, Train, Sensors, Animate; Alt+1 to Alt+5) rearrange them, and your own layouts can be saved.
+- **Native 3D viewport** drawn by MuJoCo's renderer. Right-drag orbits, middle-drag pans, the wheel zooms.
+  Shadows and reflections switch themselves off when the frame rate drops too low.
+- **Tool bar and options bar** (single-key shortcuts; the bar under the menu shows the active tool's settings): Select (Q), Orbit (W), Walk to (G: click the floor), Push (P), Grab (B:
+  drag a part with a spring), Place accessory (A: click the robot to mount a lidar, camera or payload) and
+  Measure (M).
+- **Node graph.** Wire robot, world, simulation, sensor, training, policy, design, script and output nodes
+  together and press Run (Ctrl+Enter). It runs in the background, shows progress on each node, and reuses
+  cached results for nodes that did not change. Tab or right-click adds a node; graphs save as JSON. Four
+  examples are under Graph > Examples. A graph acts on the live simulation, so you watch it happen.
+- **Timeline.** Play, pause, step, speed, and a recording of the last few minutes that can be scrubbed back.
+- **Python inside.** A console and a script editor with `session`, `viewport`, `graph`, `np` and `mujoco` in
+  scope; a Python script node does the same inside a graph.
+- **Inspector.** Click any part to edit its mass, joint limits, damping and motor gains on the running model.
+
+The graph engine has no Qt in it (`simulatics/graph`), so graphs also run headless:
+
+```python
+from simulatics import graph as G
+g = G.EXAMPLES["Walk to a goal"]()
+results = G.Executor().run(g)
+```
+
+Not in Studio yet (use the browser GUI for these): the CAD and topology-optimisation views, the ROS 2 bridge
+panel, arm and hand commands (reach, grasp, gestures), importing motion-capture files, navigating on the SLAM
+map, and the training task settings. Design search is available as a graph node only.
+
+## Run it (browser GUI)
 
 ```bash
 .venv\Scripts\python.exe -m simulatics
@@ -127,6 +171,9 @@ simulatics/
   plan/                    occupancy grids, A*, behaviour-tree navigator, 2D lidar SLAM (slam.py)
   imitate/                 BVH import, retargeting, reference clips, motion tracking (DeepMimic-style)
   robots.py                robot library (Menagerie downloads, pinned commit)
+  jobs.py                  training jobs shared by the browser GUI, Studio and graph nodes
+  graph/                   node-graph engine (no Qt): typed ports, caching executor, built-in nodes
+  studio/                  desktop workstation (PySide6): docking, viewport, tools, node editor
   bridge/                  ROS 2 bridge (rosbridge v2 client, rclpy backend, mock server)
   sim/                     locomotion tasks, vectorised environments, sensors, scenes and props
   train/                   evolution (ES/GA), PPO and distillation (numpy), policies
@@ -153,6 +200,10 @@ docs/ROS2.md               using the bridge with ROS 2
 - **Body range.** Accurate walking was verified for thigh/shin 0.28-0.55 m, pelvis 0.14-0.30 m, foot
   0.16-0.30 x 0.07-0.13 m, density 600-1300 kg/m3. The sliders allow more; very heavy or short-footed bodies
   can fall.
+- **Studio** needs a display with OpenGL 2.1 compatibility. On integrated graphics it runs at 20 to 30 fps;
+  heavy mesh robots (Go2: 200k triangles) get shadows and reflections switched off automatically. The
+  timeline scrub restores the physics state, not the controller's internal state, so resuming play after
+  a scrub can stumble. Script nodes and the console run your Python with full access to the machine.
 - **Library robots** (Adam Lite, Go2) hold a pose but do not walk; Adam Lite falls without the support stand.
 - **Accessory mass matters.** Standing push recovery has little margin: with 0.25 kg on top of the head the
   default robot falls from a 60 N sideways push that it survives at 0.1 kg (the default lidar mass).
