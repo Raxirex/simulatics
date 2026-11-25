@@ -52,6 +52,7 @@ class Viewport(QOpenGLWidget):
     message = Signal(str)
     sceneChanged = Signal()       # the model was rebuilt (after placing an accessory, for example)
     toolChanged = Signal(str)
+    _move_takes_scene: bool | None = None
 
     def __init__(self, session, parent=None):
         super().__init__(parent)
@@ -399,6 +400,12 @@ class Viewport(QOpenGLWidget):
                 self.message.emit(f"Distance {np.linalg.norm(self.measure_pts[1] - self.measure_pts[0]):.3f} m")
 
     # ---- mouse ------------------------------------------------------------
+    def _cam_args(self) -> tuple:
+        """Trailing arguments of mjv_moveCamera: MuJoCo 4 takes only the camera, MuJoCo 3 the scene too."""
+        if Viewport._move_takes_scene is None:
+            Viewport._move_takes_scene = "scn" in (mujoco.mjv_moveCamera.__doc__ or "").split(")")[0]
+        return (self.scn, self.cam) if Viewport._move_takes_scene else (self.cam,)
+
     def mousePressEvent(self, e) -> None:
         self._last = e.position()
         self._press = (e.position(), e.button())
@@ -439,7 +446,7 @@ class Viewport(QOpenGLWidget):
             act = mujoco.mjtMouse.mjMOUSE_MOVE_H if e.modifiers() & Qt.ShiftModifier else mujoco.mjtMouse.mjMOUSE_MOVE_V
         else:
             return
-        mujoco.mjv_moveCamera(self.sess.model, act, dx / h, dy / h, self.scn, self.cam)
+        mujoco.mjv_moveCamera(self.sess.model, act, dx / h, dy / h, *self._cam_args())
 
     def mouseReleaseEvent(self, e) -> None:
         if self._grab_body > 0:
@@ -462,5 +469,5 @@ class Viewport(QOpenGLWidget):
     def wheelEvent(self, e) -> None:
         if self.scn is None or self.cam.type == mujoco.mjtCamera.mjCAMERA_FIXED:
             return
-        mujoco.mjv_moveCamera(self.sess.model, mujoco.mjtMouse.mjMOUSE_ZOOM, 0, -0.0006 * e.angleDelta().y(),
-                              self.scn, self.cam)
+        mujoco.mjv_moveCamera(self.sess.model, mujoco.mjtMouse.mjMOUSE_ZOOM, 0.0, 0.0006 * e.angleDelta().y(),
+                              *self._cam_args())

@@ -26,15 +26,26 @@ def main(argv: list[str] | None = None) -> int:
         _selftest(app, win, selftest)
     code = app.exec()
     if getattr(sys, "frozen", False):
-        # Packaged build: leave now. Letting Python tear down the Qt and OpenGL objects in its own order
-        # crashes on exit there, after everything has already been saved and stopped in closeEvent.
-        for stream in (sys.stdout, sys.stderr):
-            try:
-                stream.flush()
-            except Exception:  # noqa: BLE001
-                pass
-        os._exit(int(code))
+        hard_exit(code)
     return code
+
+
+def hard_exit(code: int = 0) -> None:
+    """End the process at once. In the packaged build an ordinary exit (even os._exit) crashes inside the Qt
+    binding while Windows unloads it, so on Windows the process is terminated without unloading anything.
+    Call it only after everything worth keeping has been saved."""
+    for stream in (sys.stdout, sys.stderr):
+        try:
+            stream.flush()
+        except Exception:  # noqa: BLE001
+            pass
+    if sys.platform == "win32":
+        import ctypes
+        k32 = ctypes.windll.kernel32
+        k32.GetCurrentProcess.restype = ctypes.c_void_p
+        k32.TerminateProcess.argtypes = [ctypes.c_void_p, ctypes.c_uint]
+        k32.TerminateProcess(k32.GetCurrentProcess(), int(code))
+    os._exit(int(code))
 
 
 def _selftest(app, win, spec: str) -> None:

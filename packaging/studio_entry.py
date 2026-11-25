@@ -23,8 +23,10 @@ def main() -> int:
     multiprocessing.freeze_support()            # design search starts worker processes
     root = _workspace()
     os.chdir(root)
-    if sys.stderr is None or sys.stdout is None:  # windowed build: no console, keep errors in a log file
-        log = open(root / "studio.log", "a", buffering=1, encoding="utf-8")
+    import faulthandler
+    log = open(root / "studio.log", "a", buffering=1, encoding="utf-8")
+    faulthandler.enable(file=log)               # a native crash leaves the Python stack in the log
+    if sys.stderr is None or sys.stdout is None:  # windowed build: no console, keep errors in the log file
         sys.stdout = sys.stdout or log
         sys.stderr = sys.stderr or log
     from simulatics.studio.app import main as studio_main
@@ -38,6 +40,5 @@ if __name__ == "__main__":
         import traceback
         traceback.print_exc()
         code = 1
-    sys.stdout.flush()
-    sys.stderr.flush()
-    os._exit(int(code or 0))
+    from simulatics.studio.app import hard_exit
+    hard_exit(int(code or 0))

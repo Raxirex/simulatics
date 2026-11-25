@@ -392,3 +392,51 @@ def test_tool_options_bar_follows_the_tool(app, win):
     assert win.opt_stack.currentIndex() == 2 and win.place_type.currentData() == "payload"
     win.viewport.set_tool("select")
     assert win.opt_stack.currentIndex() == 0
+
+
+def test_mouse_orbit_pan_and_zoom_move_the_camera(app, win):
+    """Real mouse and wheel events on the viewport (these call MuJoCo's camera functions)."""
+    from PySide6.QtCore import QPoint, QPointF
+    from PySide6.QtGui import QMouseEvent, QWheelEvent
+    from PySide6.QtCore import QEvent
+    settle(app, win)
+    v = win.viewport
+    c = QPointF(v.width() / 2, v.height() / 2)
+
+    def mouse(kind, pos, button, buttons, mods=Qt.NoModifier):
+        return QMouseEvent(kind, pos, v.mapToGlobal(pos), button, buttons, mods)
+
+    d0 = v.cam.distance
+    v.wheelEvent(QWheelEvent(c, v.mapToGlobal(c), QPoint(0, 0), QPoint(0, 120), Qt.NoButton, Qt.NoModifier,
+                             Qt.NoScrollPhase, False))
+    assert v.cam.distance < d0                               # wheel up zooms in
+    az, el = v.cam.azimuth, v.cam.elevation
+    v.mousePressEvent(mouse(QEvent.MouseButtonPress, c, Qt.RightButton, Qt.RightButton))
+    v.mouseMoveEvent(mouse(QEvent.MouseMove, c + QPointF(60, 25), Qt.NoButton, Qt.RightButton))
+    v.mouseReleaseEvent(mouse(QEvent.MouseButtonRelease, c + QPointF(60, 25), Qt.RightButton, Qt.NoButton))
+    assert abs(v.cam.azimuth - az) > 1 and abs(v.cam.elevation - el) > 0.5      # right-drag orbits
+    look = v.cam.lookat.copy()
+    v.mousePressEvent(mouse(QEvent.MouseButtonPress, c, Qt.MiddleButton, Qt.MiddleButton))
+    v.mouseMoveEvent(mouse(QEvent.MouseMove, c + QPointF(40, 30), Qt.NoButton, Qt.MiddleButton))
+    v.mouseReleaseEvent(mouse(QEvent.MouseButtonRelease, c + QPointF(40, 30), Qt.MiddleButton, Qt.NoButton))
+    assert np.linalg.norm(v.cam.lookat - look) > 0.01        # middle-drag pans
+    # grab tool: dragging a body pulls it with a spring force
+    v.set_tool("grab")
+    with win.sess.lock:
+        torso = win.sess.data.xpos[1].copy()
+    v.frame_robot()
+    spin(app, timeout=0.25)
+    x, y = pixel_of(win, torso)
+    p = QPointF(x, y)
+    v.mousePressEvent(mouse(QEvent.MouseButtonPress, p, Qt.LeftButton, Qt.LeftButton))
+    assert v._grab_body > 0
+    v.mouseMoveEvent(mouse(QEvent.MouseMove, p + QPointF(30, 0), Qt.NoButton, Qt.LeftButton))
+    spin(app, timeout=0.2)
+    with win.sess.lock:
+        assert np.abs(win.sess.data.xfrc_applied).max() > 0
+    v.mouseReleaseEvent(mouse(QEvent.MouseButtonRelease, p + QPointF(30, 0), Qt.LeftButton, Qt.NoButton))
+    assert v._grab_body == -1
+    with win.sess.lock:
+        assert not win.sess.data.xfrc_applied.any()
+    win.sess.running = False
+    v.set_tool("select")

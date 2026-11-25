@@ -597,7 +597,8 @@ class StudioWindow(QMainWindow):
             # simulation thread, which crashes on exit there.
             if self.train.trainer is not None and self.train.job_state() == "running":
                 self.train.trainer.stop()
-            os._exit(0)
+            from .app import hard_exit
+            hard_exit(0)
         self._timer.stop()
         self.viewport._timer.stop()
         self.graph_panel.close()
