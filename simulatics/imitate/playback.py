@@ -92,6 +92,8 @@ class MotionPreviewController:
         self.motion = motion
         self.control_dt = float(model.opt.timestep) * 4
         self.t = 0.0
+        self.pause = 1.0                  # s the last pose is held before a one-shot clip replays
+        self.replays = 0
 
     def reset(self, model, data) -> None:
         self.t = 0.0
@@ -103,10 +105,13 @@ class MotionPreviewController:
 
     def step(self, model, data) -> None:
         self.t += self.control_dt
+        if not self.player.ref.loop and self.t > self.player.duration + self.pause:
+            self.t = 0.0                  # a one-shot clip plays again after a short pause (never a frozen pose)
+            self.replays += 1
         self.player.apply(data, self.t)
 
     def status(self) -> dict:
-        done = (not self.player.ref.loop) and self.t >= self.player.duration
+        done = False
         return {"mode": "done" if done else "walk", "message": f"previewing '{self.motion.name}' (kinematic)",
                 "motion": self.motion.name, "time_s": round(self.t, 3),
                 "phase": float(self.player.ref.phase(int(self.t / self.player.ref.dt)))}

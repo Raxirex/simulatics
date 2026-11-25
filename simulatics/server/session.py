@@ -128,8 +128,10 @@ class SimSession:
             self.controller = self._make_controller()
             self.reset()
             # terrain pieces (stairs, ramps, low blocks) are walked on, not walked around
+            # ... as long as they are low: a 0.7 m jump box is "terrain" for landing on, not for stepping onto
             walkable = {mujoco.mj_name2id(model, mujoco.mjtObj.mjOBJ_GEOM, f"obj_{i}")
-                        for i, o in enumerate(self.obstacles) if o.get("kind") == "terrain"}
+                        for i, o in enumerate(self.obstacles)
+                        if o.get("kind") == "terrain" and float(o.get("z", o["size"][2])) + float(o["size"][2]) <= 0.4}
             self.grid.rasterize_truth(model, self.data, walkable=walkable - {-1})
             self.grid.reset_lidar()
             self.nav.clear()
@@ -310,6 +312,30 @@ class SimSession:
             self.reset_slam()
             self.running = True
         return f"playing '{tape.name}' in physics ({tape.duration:.1f} s of recorded motor commands)"
+
+    # controllers that play something and ignore walking goals; a goal hands the robot to the walking controller
+    NOT_WALKING = ("motion-preview", "motion-pd", "imitation", "world-model")
+
+    def _take_over_to_walk(self):
+        """A walking goal arrived while a motion is playing: switch to the walking controller where the robot
+        is. After a kinematic preview the pose can be anything, so the robot starts again from its standing
+        start pose; a robot that is physically standing (arm motion, imitation) is taken over as it is."""
+        old = getattr(self.controller, "name", "")
+        goals = list(self.nav.goals)
+        self.controller_kind = "auto"
+        new = self._make_controller()
+        self.controller = new
+        if old == "motion-preview" or not hasattr(new, "adopt"):
+            self.reset()                 # a preview is not physical (the robot may be upside down, or inside
+            #                              a box): start again standing where the clip started
+        else:
+            new.adopt(self.model, self.data)
+            new.set_path(None)
+            self.nav.clear()
+            self.nav.take_new_path()
+        for i, (g, yaw) in enumerate(goals):
+            self.nav.set_goal(g, yaw, append=i > 0)
+        return new
 
     def _release_tape(self) -> None:
         """Undo the model settings a recorded motion plays under (see imitate/physical.py prepare_model)."""
@@ -772,6 +798,14 @@ class SimSession:
 
     def _control_step(self) -> None:
         m, d, task, c = self.model, self.data, self.task, self.controller
+        if task is not None and self.nav.goals and getattr(c, "name", "") in self.NOT_WALKING:
+            c = self._take_over_to_walk()
+        if task is not None and self.nav.goals and self.nav.state == "walking" and m.nbody > 1:
+            feet = [b for b in range(m.nbody) if m.body(b).name.endswith("_foot")]
+            if feet and min(float(d.xpos[b][2]) for b in feet) > 0.45 and getattr(c, "name", "") == "walker"                     and c.status().get("mode") == "stand":
+                # standing on something high (after a jump onto a box): walking off it would be a fall
+                self.nav.clear()
+                self.nav.state, self.nav.message = "failed", "the robot is on a platform too high to step down from"
         if task is not None:
             x, y, yaw = base_pose(d)
             if self.nav_on_slam:
