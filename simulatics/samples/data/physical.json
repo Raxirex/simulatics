@@ -151,31 +151,28 @@
     ]
    }
   ],
-  "verified": false,
+  "verified": true,
   "survives_nudge": false,
   "duration_s": 4.02,
-  "seconds_to_find": 28.6,
+  "seconds_to_find": 27.0,
   "live": {
    "controllers": [
     "motion-physical",
     "walker"
    ],
-   "falls_after": 1,
+   "falls_after": 0,
    "final_up": 1.0,
-   "final_speed": 0.05,
-   "final_height_m": 1.124,
-   "travel_m": 0.0,
-   "min_up": 0.39,
+   "final_speed": 0.0,
+   "final_height_m": 1.761,
+   "travel_m": 0.72,
+   "min_up": 0.7,
    "flight_s": 0.3,
    "com_rise_m": 0.736,
    "rotation_rad": 0.01,
-   "drop_m": -0.0,
-   "on_box": false,
-   "ok": false,
-   "why": [
-    "did not end standing still and upright",
-    "on_box is False, needed at least True"
-   ]
+   "drop_m": -0.64,
+   "on_box": true,
+   "ok": true,
+   "why": []
   },
   "title": "Jump onto a box",
   "description": "A two-foot standing jump onto a platform about knee to hip high.",
@@ -319,5 +316,46 @@
   "title": "Front flip",
   "description": "A forward somersault. No clean front flip exists in the source database, so this is the backflip take played backwards: time-reversed flight is still a valid ballistic flight.",
   "source": "CMU Graphics Lab Motion Capture Database (mocap.cs.cmu.edu), subject 88 trial 1"
+ },
+ "cartwheel": {
+  "file": "cartwheel.tape.npz",
+  "clip": "cartwheel",
+  "params": {
+   "hip_torque": 300.0,
+   "knee_torque": 360.0,
+   "ankle_torque": 180.0,
+   "abdomen_torque": 200.0,
+   "arm_torque": 150.0
+  },
+  "props": [],
+  "verified": false,
+  "survives_nudge": false,
+  "duration_s": 4.88,
+  "seconds_to_find": 114.0,
+  "live": {
+   "controllers": [
+    "motion-physical",
+    "walker"
+   ],
+   "falls_after": 1,
+   "final_up": 1.0,
+   "final_speed": 0.0,
+   "final_height_m": 1.124,
+   "travel_m": 0.0,
+   "min_up": -0.96,
+   "flight_s": 0.06,
+   "com_rise_m": 0.0,
+   "rotation_rad": 4.96,
+   "drop_m": 0.1,
+   "on_box": false,
+   "ok": false,
+   "why": [
+    "did not end standing still and upright",
+    "rotation_rad is 4.96, needed at least 5.0"
+   ]
+  },
+  "title": "Cartwheel",
+  "description": "One cartwheel.",
+  "source": "CMU Graphics Lab Motion Capture Database (mocap.cs.cmu.edu), subject 88 trial 7"
  }
 }

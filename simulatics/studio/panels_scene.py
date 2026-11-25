@@ -562,7 +562,10 @@ class AssetsPanel(QWidget):
         for i, (label, fn) in enumerate((("Obstacles", lambda: self.sess.random_obstacles(12)),
                                          ("Terrain course", lambda: self.sess.terrain_course("mixed")),
                                          ("Table and objects", lambda: self.sess.manipulation_scene()),
-                                         ("Empty world", lambda: self.sess.clear_obstacles()))):
+                                         ("Empty world", lambda: self.sess.clear_obstacles()),
+                                         ("Playground", lambda: self.sess.load_world("playground")),
+                                         ("Parkour course", lambda: self.sess.load_world("parkour")),
+                                         ("Kitchen", lambda: self.sess.load_world("kitchen")))):
             b = QPushButton(label)
             b.clicked.connect(lambda _=False, fn=fn: self._world(fn))
             grid.addWidget(b, i // 2, i % 2)
@@ -613,6 +616,8 @@ class AssetsPanel(QWidget):
     def _guard(self, fn, *a):
         try:
             out = fn(*a)
+            if isinstance(out, dict) and out.get("about"):
+                out = out["about"]
             if isinstance(out, str):
                 self.studio.log(out)
         except Exception as e:  # noqa: BLE001

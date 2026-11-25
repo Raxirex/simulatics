@@ -66,6 +66,10 @@ class ManualController:
 
     def step(self, model, data) -> None:
         data.ctrl[:] = self.target
+        sig = getattr(self, "signal", None)
+        if sig is not None:                     # a test signal on one motor, timed by simulation time
+            i, value = sig(float(data.time))
+            data.ctrl[i] = value
 
     def status(self) -> dict:
         return {"mode": "stand", "message": "manual joint targets (no walking)"}

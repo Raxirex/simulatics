@@ -99,6 +99,9 @@ class SimSession:
         self.slam_true: list = []        # true positions, to draw against the estimate
         self._slam_t = -1.0
         self.nav_on_slam = False         # plan with the SLAM map and the SLAM pose
+        from collections import deque
+        self.motor_trace: deque = deque(maxlen=6000)   # (time, target, angle, speed, torque) of the traced motor
+        self._trace_act: int | None = None
         self.build()
         self._thread = threading.Thread(target=self._loop, name="sim", daemon=True)
         self._thread.start()
@@ -114,8 +117,10 @@ class SimSession:
             elif self.cad_xml:
                 model = mujoco.MjModel.from_xml_string(self.cad_xml)
             else:
-                model = mujoco.MjModel.from_xml_string(self.generated_xml())
+                xml = self.generated_xml()
+                model = self._on_stand(xml) if self.support_stand else mujoco.MjModel.from_xml_string(xml)
             self.model, self.data = model, mujoco.MjData(model)
+            self.motor_trace.clear()
             self.task = LocoTask(model, self.task_cfg) if has_free_root(model) and model.nu > 0 else None
             self.manual_ctrl = self.task.ctrl0.copy() if self.task else np.zeros(model.nu)
             self.lidar = Lidar(model, self.lidar_cfg)
@@ -230,8 +235,8 @@ class SimSession:
     def _make_controller(self):
         """Pick the controller for the current model: an explicit choice if it is possible, else the best available."""
         m, kind = self.model, self.controller_kind
-        if self.task is None:
-            return ManualController(m, self.manual_ctrl)
+        if self.task is None or (self.support_stand and not self.custom_path):
+            return ManualController(m, self.manual_ctrl)     # on the stand: joints are driven directly
         if self.policy is not None and kind in ("auto", "es-policy"):
             return PolicyController(m, self.policy, self.task)
         if getattr(self, "rl_policy", None) is not None and kind in ("auto", "rl"):
@@ -317,6 +322,15 @@ class SimSession:
         self._release_tape()
         self.controller_kind = "auto"
         new = self._make_controller()
+        feet = [b for b in range(self.model.nbody) if self.model.body(b).name.endswith("_foot")]
+        if getattr(new, "name", "") == "walker" and feet and min(float(self.data.xpos[b][2]) for b in feet) > 0.25:
+            # it ended standing on something (a box): the walker must treat that as ground, whatever its height
+            from ..control.walker import WalkController, WalkParams
+            from ..control.walk_terrain import TerrainLimits, TerrainMap
+            new = WalkController(self.model, WalkParams(terrain=True))
+            lg = new.geo.legs["left"]
+            new.terrain = TerrainMap(self.model, lg.half_length, lg.half_width,
+                                     TerrainLimits(margin=new.p.terrain_margin), max_top=3.0)
         if hasattr(new, "adopt"):
             new.adopt(self.model, self.data)
         else:
@@ -427,6 +441,64 @@ class SimSession:
             self.cad_xml = None
             self.build()
             self.running = False
+
+    def _on_stand(self, xml: str, lift: float = 0.12) -> mujoco.MjModel:
+        """Built-in robot hung on a support stand: the torso is welded in place a little above standing height,
+        so the feet are off the floor and single joints can be driven without the robot falling over."""
+        spec = mujoco.MjSpec.from_string(xml)
+        root = mujoco.MjModel.from_xml_string(xml).body(1).name
+        try:
+            spec.body(root).pos[2] += lift
+        except Exception:  # noqa: BLE001 - older MuJoCo: stand at standing height instead
+            pass
+        spec.add_equality(type=mujoco.mjtEq.mjEQ_WELD, objtype=mujoco.mjtObj.mjOBJ_BODY, name1=root, name="support_stand")
+        return spec.compile()
+
+    # ---- precise motor control ---------------------------------------------------------------------------
+    def trace_motor(self, index: int | None) -> None:
+        """Record target, angle, speed and torque of one motor at every control step (None = stop)."""
+        with self.lock:
+            self._trace_act = None if index is None or not 0 <= int(index) < self.model.nu else int(index)
+            self.motor_trace.clear()
+
+    def set_motor_signal(self, index: int, kind: str = "hold", amplitude: float = 0.0, frequency: float = 1.0,
+                         base: float | None = None) -> str:
+        """Drive one motor with a test signal around `base` (rad): "hold", "step", "sine", "square" or "chirp"
+        (0.2 Hz to `frequency` over 10 s). Needs manual control (use the support stand so the robot stays up)."""
+        kinds = ("hold", "step", "sine", "square", "chirp")
+        if kind not in kinds:
+            raise ValueError(f"signal must be one of {kinds}")
+        with self.lock:
+            c, i = self.controller, int(index)
+            if getattr(c, "name", "") != "manual":
+                raise ValueError("switch to manual control first (Motor Control: hold the robot on the stand)")
+            if not 0 <= i < self.model.nu:
+                raise IndexError("motor index out of range")
+            b = float(self.manual_ctrl[i] if base is None else base)
+            t0, a, f = float(self.data.time), float(amplitude), max(float(frequency), 0.01)
+            lo, hi = self.model.actuator_ctrlrange[i]
+            lim = bool(self.model.actuator_ctrllimited[i])
+
+            def sig(t, kind=kind):
+                x = t - t0
+                if kind == "hold":
+                    v = b
+                elif kind == "step":
+                    v = b + (a if x >= 0.2 else 0.0)
+                elif kind == "sine":
+                    v = b + a * np.sin(2 * np.pi * f * x)
+                elif kind == "square":
+                    v = b + a * (1.0 if np.sin(2 * np.pi * f * x) >= 0 else -1.0)
+                else:
+                    k = (f - 0.2) / 10.0
+                    v = b + a * np.sin(2 * np.pi * (0.2 * x + 0.5 * k * min(x, 10.0) ** 2 + max(x - 10.0, 0) * (f - 0.2)))
+                return i, float(np.clip(v, lo, hi) if lim else v)
+            c.signal = None if kind == "hold" else sig
+            if kind == "hold":
+                self.manual_ctrl[i] = np.clip(b, lo, hi) if lim else b
+            self.motor_trace.clear()
+            self.running = True
+        return f"{kind} on {self.model.actuator(i).name}"
 
     def _compile_imported(self) -> mujoco.MjModel:
         """Imported MJCF/URDF compiled through MjSpec (assets resolve next to the file), with the mounted
@@ -737,6 +809,11 @@ class SimSession:
                 d.xfrc_applied[root, :3] = 0.0
                 self._push = None
         mujoco.mj_step(m, d, max(1, int(round(c.control_dt / m.opt.timestep))))
+        i = self._trace_act
+        if i is not None and i < m.nu:
+            j = int(m.actuator_trnid[i, 0])
+            self.motor_trace.append((float(d.time), float(d.ctrl[i]), float(d.qpos[m.jnt_qposadr[j]]),
+                                     float(d.qvel[m.jnt_dofadr[j]]), float(d.actuator_force[i])))
         if getattr(c, "name", "") == "motion-physical":
             # A recorded physical motion may be upside down on purpose (a flip): no fall check while it plays.
             # When it ends the balance controller takes over the robot as it stands (no reset: it keeps its

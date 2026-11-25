@@ -80,6 +80,7 @@ def _builtin(session, obstacles: list[dict] | None = None, params: dict | None =
         session.running = False
         session.unload_policy()
         session.controller_kind = "auto"
+        session.support_stand = False
         session.obstacles, session.props, session.cad_xml = list(obstacles or []), [], None
         session.set_params({**HumanoidParams().to_dict(), **(params or {})})      # rebuilds
         session.speed = 1.0
@@ -201,6 +202,7 @@ def _world(session, name: str, waypoints: bool = True) -> dict:
         session.unload_policy()
         session.controller_kind = "auto"
         session.custom_path, session.cad_xml = None, None
+        session.support_stand = False
         session.params = HumanoidParams()
         session.speed = 1.0
     info = session.load_world(name)

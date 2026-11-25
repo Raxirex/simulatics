@@ -20,8 +20,10 @@ from .panels_run import ConsolePanel, LogPanel, PilotPanel, ResultsPanel, Timeli
 from .panels_scene import AssetsPanel, InspectorPanel, MotorsPanel, OutlinerPanel, RobotPanel
 from .viewport import FLAGS, TOOLS, VIEWS, Viewport
 from .panels_run import SensorsPanel
+from .panels_motor import MotorPanel
+from .panels_world import WorldModelPanel
 
-WORKSPACES = ["Layout", "Graph", "Train", "Sensors", "Animate"]
+WORKSPACES = ["Layout", "Graph", "Train", "Sensors", "Animate", "Motors"]
 L, R, T, B = Qt.LeftDockWidgetArea, Qt.RightDockWidgetArea, Qt.TopDockWidgetArea, Qt.BottomDockWidgetArea
 
 
@@ -63,8 +65,12 @@ class StudioWindow(QMainWindow):
         self.train = TrainPanel(self)
         self.sensors = SensorsPanel(self)
         self.pilot = PilotPanel(self)
+        self.motor = MotorPanel(self)
+        self.world_model = WorldModelPanel(self)
         self.graph_panel = GraphPanel(self)
         self.console.ns["graph"] = self.graph_panel.graph
+        self.console.ns["world_model"] = self.world_model
+        self.console.ns["samples"] = __import__("simulatics.samples", fromlist=["run"])
 
         self.docks: dict[str, QDockWidget] = {}
         for key, title, widget in (
@@ -74,6 +80,7 @@ class StudioWindow(QMainWindow):
                 ("timeline", "Timeline", self.timeline), ("graph", "Node Graph", self.graph_panel),
                 ("results", "Results", self.results), ("train", "Training", self.train),
                 ("sensors", "Sensors", self.sensors), ("pilot", "AI Pilot", self.pilot),
+                ("motor", "Motor Control", self.motor), ("worldmodel", "World Model", self.world_model),
                 ("console", "Python", self.console), ("log", "Log", self.log_panel)):
             d = QDockWidget(title, self)
             d.setObjectName(f"dock_{key}")
@@ -381,6 +388,8 @@ class StudioWindow(QMainWindow):
         self.motors.rebuild()
         self.assets.sync()
         self.sensors.sync()
+        self.motor.sync()
+        self.world_model.sync()
         self.inspector.show("scene", 0)
         self.viewport.select_body(-1)
         self._fill_cameras()
@@ -438,6 +447,8 @@ class StudioWindow(QMainWindow):
             self.sensors.refresh()
             self.train.refresh()
             self.pilot.refresh()
+            self.motor.refresh()
+            self.world_model.refresh()
             self.st_sim.setText(f"{'running' if s.running else 'paused'}  {s.speed:g}x   t {float(s.data.time):.2f} s   falls {s.falls}")
             self.st_ctrl.setText(f"{s.robot_name if s.custom_path else 'built-in humanoid'}   controller: {getattr(s.controller, 'name', 'none')}")
             jobs = []
@@ -500,6 +511,14 @@ class StudioWindow(QMainWindow):
             show = ["viewport", "sensors", "pilot", "assets", "log", "timeline"]
             sizes = ([d["viewport"], d["sensors"]], [900, 700], H), ([d["sensors"], d["pilot"]], [520, 320], V),                     ([d["viewport"], d["timeline"]], [640, 150], V)
             front = ["pilot"]
+        elif name == "Motors":
+            first("viewport")
+            split("viewport", "motor", H)
+            split("viewport", "inspector", V)
+            tab("inspector", "motors", "log")
+            show = ["viewport", "motor", "inspector", "motors", "log"]
+            sizes = ([d["viewport"], d["motor"]], [620, 1040], H), ([d["viewport"], d["inspector"]], [520, 380], V)
+            front = ["inspector", "motor"]
         elif name == "Animate":
             first("assets")
             split("assets", "viewport", H)
@@ -518,7 +537,7 @@ class StudioWindow(QMainWindow):
             split("outliner", "assets", V)
             split("inspector", "sensors", V)
             tab("inspector", "robot", "motors")
-            tab("timeline", "graph", "train", "results", "pilot", "console", "log")
+            tab("timeline", "graph", "train", "results", "motor", "worldmodel", "pilot", "console", "log")
             show = list(d)
             sizes = ([d["outliner"], d["viewport"], d["inspector"]], [270, 1000, 380], H),                     ([d["viewport"], d["timeline"]], [640, 250], V), ([d["inspector"], d["sensors"]], [470, 330], V),                     ([d["outliner"], d["assets"]], [430, 370], V)
             front = ["inspector", "timeline"]
@@ -604,6 +623,7 @@ class StudioWindow(QMainWindow):
         self.graph_panel.close()
         if self.train.trainer is not None and self.train.job_state() == "running":
             self.train.trainer.stop()
+        self.world_model.runner.stop()
         if self._owns_session:
             self.sess.shutdown()
         super().closeEvent(e)

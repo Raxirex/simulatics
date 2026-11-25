@@ -198,13 +198,24 @@ def build(cid: str, session, log=print) -> dict:
 
 def main(argv: list[str] | None = None) -> None:
     from ..server.session import SimSession
-    ids = list(argv if argv is not None else sys.argv[1:]) or list(PHYSICAL)
+    args = list(argv if argv is not None else sys.argv[1:])
+    seed = 0
+    if "--seed" in args:                                       # another random draw for the ones that failed
+        i = args.index("--seed")
+        seed = int(args[i + 1])
+        del args[i:i + 2]
+    ids = args or list(PHYSICAL)
+    if seed:
+        for cid in ids:
+            PHYSICAL[cid] = {**PHYSICAL[cid], "cfg": {**PHYSICAL[cid].get("cfg", {}), "seed": 1000 * seed}}
     path = DATA / "physical.json"
     out = json.loads(path.read_text(encoding="utf-8")) if path.exists() else {}
     session = SimSession()
     session.lidar_cfg.enabled = False
     try:
         for cid in ids:
+            if seed and out.get(cid, {}).get("verified"):
+                continue                                       # already works
             entry = build(cid, session)
             if entry["verified"] or cid not in out or not out[cid].get("verified"):
                 out[cid] = entry                               # never replace a working result with a failed one
