@@ -287,8 +287,46 @@ class SimSession:
             self.running = True
         return f"playing {motion or Path(policy).parent.name} ({mode})"
 
+    def play_tape(self, tape) -> str:
+        """Play a physically simulated motion (imitate/physical.py Tape, or a path to one): from its standing
+        start state the controller writes only the recorded motor commands; physics does the rest."""
+        from ..imitate.physical import Tape, TapeController
+        if not hasattr(tape, "ctrl"):
+            tape = Tape.load(tape)
+        with self.lock:
+            self._release_tape()
+            ctrl = TapeController(self.model, tape)             # raises when the robot or world differs
+            self.controller_kind, self.controller = "motion-physical", ctrl
+            self.nav.clear()
+            self.nav.take_new_path()
+            self._push = None
+            self.data.xfrc_applied[:] = 0
+            ctrl.reset(self.model, self.data)
+            self.reset_slam()
+            self.running = True
+        return f"playing '{tape.name}' in physics ({tape.duration:.1f} s of recorded motor commands)"
+
+    def _release_tape(self) -> None:
+        """Undo the model settings a recorded motion plays under (see imitate/physical.py prepare_model)."""
+        c = self.controller
+        if getattr(c, "name", "") == "motion-physical" and getattr(c, "_saved", None) is not None:
+            c.release(self.model)
+
+    def _end_tape(self) -> None:
+        """The recorded motion is over: hand the robot, as it stands, to the balance controller."""
+        self._release_tape()
+        self.controller_kind = "auto"
+        new = self._make_controller()
+        if hasattr(new, "adopt"):
+            new.adopt(self.model, self.data)
+        else:
+            new.reset(self.model, self.data)
+        new.set_path(None)
+        self.controller = new
+
     def set_controller(self, kind: str) -> None:
         with self.lock:
+            self._release_tape()
             self.controller_kind = kind
             self.controller = self._make_controller()
             self.reset()
@@ -663,7 +701,8 @@ class SimSession:
             if isinstance(c, PolicyController):
                 c.heading = self.heading
         c.step(m, d)
-        if self.arms is not None and getattr(c, "name", "") not in ("imitation", "motion-preview", "motion-pd"):
+        if self.arms is not None and getattr(c, "name", "") not in ("imitation", "motion-preview", "motion-pd",
+                                                                    "motion-physical"):
             # Only arms that received a command write ctrl, so idle arms keep the Motors-tab targets.
             # The arm IK runs at its own (lower) rate; it times itself from data.time.
             self._arm_tick += 1
@@ -679,6 +718,12 @@ class SimSession:
                 d.xfrc_applied[root, :3] = 0.0
                 self._push = None
         mujoco.mj_step(m, d, max(1, int(round(c.control_dt / m.opt.timestep))))
+        if getattr(c, "name", "") == "motion-physical":
+            # a recorded physical motion may be upside down on purpose (a flip): no fall check while it plays;
+            # when it ends the balance controller takes over the robot as it stands, and falls count again
+            if c.done:
+                self._end_tape()
+            return
         if task is None or isinstance(c, ManualController) or getattr(c, "name", "") == "motion-preview":
             return      # a kinematic preview cannot fall (flips and handstands are upside down on purpose)
         _, up = LocoTask.yaw_up(d.qpos[None])

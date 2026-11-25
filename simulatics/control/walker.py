@@ -356,6 +356,24 @@ class WalkController:
         self.zref = mid[None].copy()
         data.ctrl[self.act] = self._clip_ctrl(model, q)
 
+    def adopt(self, model: mujoco.MjModel, data: mujoco.MjData) -> None:
+        """Take over a robot that is already standing (after another controller), without touching its state:
+        the same bookkeeping as reset(), but data.qpos and data.qvel are left exactly as they are."""
+        self._reset_state()
+        mujoco.mj_forward(model, data)
+        feet = {s: np.array(self._foot_pose(data, s)) for s in (LEFT, RIGHT)}
+        mid = (feet[LEFT][:2] + feet[RIGHT][:2]) / 2
+        self.scratch.qpos[:] = data.qpos
+        if self.terrain is not None:
+            for s_ in (LEFT, RIGHT):
+                fh = self.terrain.ground(*feet[s_], z_ref=float(data.xpos[self.foot_body[s_]][2]) - 0.06)
+                self.ground[s_] = (fh.z, fh.normal)
+            self._dz = (self.ground[LEFT][0] + self.ground[RIGHT][0]) / 2
+            self._zh_hist = [self._dz]
+        self.feet = feet
+        self.x[0] = data.subtree_com[self.torso_id][:2]
+        self.zref = mid[None].copy()
+
     def _clip_ctrl(self, model: mujoco.MjModel, u: np.ndarray) -> np.ndarray:
         """Clip to ctrlrange only where the actuator is ctrl-limited (an unlimited one has ctrlrange 0 0)."""
         lo, hi = model.actuator_ctrlrange[self.act].T
