@@ -31,7 +31,7 @@ DATA = Path(__file__).resolve().parent / "data"
 class Sample:
     id: str
     title: str
-    group: str                 # "Standing and walking" | "Worlds" | "Acrobatics" | "Parkour" | "Reference takes"
+    group: str                 # "Standing and walking" | "Worlds" | "Trained skills" | "Acrobatics" | "Parkour" | ...
     description: str
     kind: str                  # "physics" | "reference"
     setup: Callable            # setup(session) -> message
@@ -292,4 +292,24 @@ def _register_clips() -> None:
                               "reference", lambda session, clip=clip: _reference(session, clip), clip.get("source", ""))
 
 
+def _register_skills() -> None:
+    """Moves the robot learned by parallel search (simulatics/skills), shipped as recordings of motor commands."""
+    skills_dir = Path(__file__).resolve().parent.parent / "skills" / "data"
+    index = skills_dir / "index.json"
+    if not index.exists():
+        return
+    for sid, e in json.loads(index.read_text(encoding="utf-8")).items():
+        path = skills_dir / e["file"]
+        if not path.exists():
+            continue
+
+        def setup(session, path=path):
+            from .. import skills
+            return skills.play(session, path)
+        note = (" Learned by the skill trainer: a parallel search in physics over motor programs "
+                f"({(e.get('physics_steps') or 0) / 1e6:.0f} million simulated steps). Open loop, motor commands only.")
+        SAMPLES[sid] = Sample(sid, e["title"] + " (trained)", "Trained skills", e["description"] + note, "physics", setup)
+
+
 _register_clips()
+_register_skills()

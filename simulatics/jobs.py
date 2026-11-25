@@ -15,6 +15,7 @@ TRAIN_PRESETS = {
     "ppo": {"population": 256, "generations": 1500, "lr": 0.001, "threads": 8, "episode_seconds": 20},
     "distill": {"population": 16, "generations": 14, "lr": 0.001, "threads": 5, "episode_seconds": 25},
     "imitation": {"population": 64, "generations": 1500, "lr": 0.001, "threads": 4, "episode_seconds": 10},
+    "skill": {"population": 256, "generations": 120, "lr": 0.001, "threads": 0, "episode_seconds": 2},
     "es": {"population": 256, "generations": 200, "lr": 0.005, "sigma": 0.01, "threads": 0, "episode_seconds": 8},
     "ga": {"population": 256, "generations": 200, "lr": 0.005, "sigma": 0.01, "threads": 0, "episode_seconds": 8},
 }
@@ -88,8 +89,17 @@ def list_policies() -> list[dict]:
     from .train.ppo import RLPolicy, is_rl_policy
     out = []
     for p in sorted(list(RUNS.glob("*/policy.npz")) + list(RUNS.glob("*/rl_policy.npz"))
-                    + list(RUNS.glob("*/imitation_policy.npz")), key=lambda p: -p.stat().st_mtime):
+                    + list(RUNS.glob("*/imitation_policy.npz")) + list(RUNS.glob("*/skill.tape.npz")),
+                    key=lambda p: -p.stat().st_mtime):
         try:
+            if p.name == "skill.tape.npz":                      # a trained skill (skills/): a motor-command recording
+                import json
+                info = p.parent / "skill.json"
+                meta = json.loads(info.read_text(encoding="utf-8")) if info.exists() else {}
+                out.append({"name": p.parent.name, "path": str(p), "fitness": meta.get("best"),
+                            "generation": len(meta.get("history", [])), "algo": "skill", "kind": "skill",
+                            "custom_model": False})
+                continue
             if p.name == "imitation_policy.npz":
                 from .imitate import is_imitation_policy
                 if not is_imitation_policy(p):
@@ -150,6 +160,15 @@ def make_trainer(d: dict, params, task_cfg, custom_path: str | None = None, expo
         tr = DistillJob(export_xml, params, name, int(np.clip(d.get("generations", 14), 1, 50)),
                          int(np.clip(d.get("population", 16), 1, 64)), int(np.clip(d.get("threads") or 5, 1, 16)),
                          float(np.clip(d.get("episode_seconds", 25), 2, 120)))
+    elif algo == "skill":
+        from .skills import SKILLS, SkillTrainer
+        from .skills import TrainConfig as SkillConfig
+        sid = str(d.get("skill") or d.get("motion") or "uppercut")
+        if sid not in SKILLS:
+            raise ValueError(f"unknown skill {sid!r} (have: {', '.join(SKILLS)})")
+        tr = SkillTrainer(SKILLS[sid], SkillConfig(population=int(np.clip(d.get("population", 256), 16, 4096)),
+                                                   generations=int(np.clip(d.get("generations", 120), 1, 100000)),
+                                                   threads=int(d.get("threads") or 0), name=name), runs_dir=RUNS)
     elif algo in ("es", "ga"):
         cfg = TrainConfig.from_dict(d)
         cfg.name = name
@@ -158,7 +177,7 @@ def make_trainer(d: dict, params, task_cfg, custom_path: str | None = None, expo
         init = init_policy
         tr = Trainer(cfg, params, task_cfg, model_xml=custom_path, runs_dir=RUNS, init_policy=init)
     else:
-        raise ValueError("algo must be ppo, distill, imitation, es or ga")
+        raise ValueError("algo must be ppo, distill, imitation, skill, es or ga")
     return tr
 
 

@@ -15,6 +15,7 @@ hidden += collect_submodules("simulatics")
 
 datas += [(str(p), "simulatics/imitate/motions") for p in (ROOT / "simulatics/imitate/motions").glob("*.npz")]
 datas += [(str(p), "simulatics/samples/data") for p in (ROOT / "simulatics/samples/data").glob("*") if p.is_file()]
+datas += [(str(p), "simulatics/skills/data") for p in (ROOT / "simulatics/skills/data").glob("*") if p.is_file()]
 datas += [(str(p), "simulatics/server/static") for p in (ROOT / "simulatics/server/static").glob("*")]
 datas += [(str(p), "simulatics/native/bin") for p in (ROOT / "simulatics/native/bin").glob("*.dll")]
 for run in ("pretrained_walker", "rl_walker", "imitate_walk"):          # the policies tracked in git

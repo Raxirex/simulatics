@@ -29,11 +29,10 @@ def uppercut_scene() -> tuple[list[dict], list[dict]]:
     """A ball on a tee at chest height in front of the right shoulder."""
     tee = {"name": "tee", "shape": "cylinder", "pos": [BALL_XY[0], BALL_XY[1]], "size": [0.03, 0.03, TEE_TOP / 2],
            "z": TEE_TOP / 2, "yaw": 0.0, "rgba": [0.62, 0.65, 0.70, 1.0]}
-    foot = {"name": "tee base", "shape": "cylinder", "pos": [BALL_XY[0], BALL_XY[1]], "size": [0.14, 0.14, 0.01],
-            "z": 0.01, "yaw": 0.0, "rgba": [0.30, 0.32, 0.36, 1.0]}
     ball = {"name": "ball", "shape": "sphere", "pos": [BALL_XY[0], BALL_XY[1], TEE_TOP + BALL_R + 0.001], "size": [BALL_R],
             "mass": 0.12, "rgba": [0.95, 0.35, 0.15, 1.0], "yaw": 0.0}
-    return [tee, foot], [ball]
+    # no base plate: anything low near the toes is read by the balance controller as a step to stand on
+    return [tee], [ball]
 
 
 def _uppercut_measure(r: Rollout) -> dict:

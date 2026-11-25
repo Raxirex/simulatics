@@ -89,6 +89,7 @@ Samples menu in Studio (or the Samples list in the Assets panel), and from Pytho
 |---|---|---|
 | Physics, controllers | Stand and balance, Stand through pushes, Wave with one hand, Walk forward, Walk from point to point, Walk around obstacles, Climb stairs, Playground, Parkour course, Kitchen | The robot's own balance and walking controllers in the physics simulation |
 | Physics, recorded motor commands | Backflip, Vertical jump, Broad jump, Jump a hurdle, Jump onto a box, Jump down from a box | Motor commands only; gravity and contact do the rest (see below) |
+| Physics, trained skill | Uppercut | A move the robot learned by parallel search in physics (see Skill training) |
 | Reference motion | Front flip, Front handspring, Cartwheel, Handstand, Stand on one hand, and the original take of each physical one | A motion-capture take played back pose by pose; not simulated |
 
 ### Physically simulated jumps and flips
@@ -129,6 +130,48 @@ Limits you should know:
 
 Rebuild or add your own: `python -m simulatics.samples.build_physical` (all) or with clip names; add
 `--seed 2` to retry the ones that failed with another random draw.
+
+### Skill training (parallel)
+
+Teach the robot a new move by trying thousands of variations at once (`simulatics/skills`). A skill is a scene
+plus a reward. Training searches for a motor program (a smooth time course of servo-target offsets for the
+joints the skill may move): every generation a population of candidates is simulated in parallel on all CPU
+cores, each from several slightly different starts, scored, and the search moves toward the best
+(cross-entropy method). A candidate is scored by its worst attempt, which is what makes the result hold up.
+The learned move ends with a balanced return to the standing stance, so the balance controller can take over.
+
+```bash
+.venv\Scripts\python.exe -m simulatics.skills uppercut --generations 160 --population 320
+```
+
+In Studio: Training panel, method "Skill", then Start; the curve updates live, and the result appears under
+Trained policies (double-click to play it).
+
+**The demo: an uppercut.** A ball sits on a tee at chest height. The reward is how high the ball is sent, the
+upward speed of the fist at contact, and still standing where you started. Training on this laptop's CPU
+(about 100,000 physics steps per second across 16 threads) takes six to ten minutes. The shipped result is the
+"Uppercut (trained)" sample; its measured numbers are in `simulatics/skills/data/index.json`.
+
+A new skill is a few lines:
+
+```python
+from simulatics import skills
+
+def reward(r: skills.Rollout):                       # r holds every simulated attempt, as arrays
+    return r.body_pos("left_hand")[:, :, 2].max(axis=1) + r.stays_standing()
+
+spec = skills.SkillSpec("raise_hand", "Raise the left hand", "...", joints=["left_shoulder_y", "left_elbow"],
+                        reward=reward, duration=0.6)
+tape = skills.SkillTrainer(spec, skills.TrainConfig(generations=40)).run()
+skills.play(session, tape)
+```
+
+What it is not: the result is an open-loop motor program for one situation (with small variations), not a
+policy that reacts to what it sees; for those there is PPO (`train/ppo.py`) and motion imitation
+(`imitate/train.py`). It runs on CPU threads. `skills.Backend` is the seam where a GPU simulator (MuJoCo MJX
+or MuJoCo Warp, thousands of robots per step) would plug in; none is installed, and `GpuBackend` says so. A
+second skill, "kick", is defined but has no trained result (balancing on one leg without feedback is hard
+for an open-loop program).
 
 ### Worlds
 
@@ -273,6 +316,7 @@ simulatics/
   jobs.py                  training jobs shared by the browser GUI, Studio and graph nodes
   graph/                   node-graph engine (no Qt): typed ports, caching executor, built-in nodes
   samples/                 ready-made samples: physics set-ups and retargeted motion-capture clips
+  skills/                  skill training: parallel motor-program search (uppercut demo)
   worldmodel/              world-model slot: interface, stand-in, runner (placeholder)
   studio/                  desktop workstation (PySide6): docking, viewport, tools, node editor
   bridge/                  ROS 2 bridge (rosbridge v2 client, rclpy backend, mock server)

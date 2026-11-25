@@ -374,6 +374,7 @@ class ConsolePanel(QWidget):
 ALGOS = [("ppo", "PPO velocity tracking (reinforcement learning)"),
          ("distill", "Distil the model-based walker into a network"),
          ("imitation", "Motion imitation (track a reference clip)"),
+         ("skill", "Skill: learn a new move by parallel search (uppercut, kick)"),
          ("es", "Evolution strategy"), ("ga", "Genetic algorithm")]
 
 
@@ -418,7 +419,8 @@ class TrainPanel(QWidget):
         f.addRow("Learning rate", self.lr)
         f.addRow("Episode length (s)", self.seconds)
         f.addRow("CPU threads", self.threads)
-        f.addRow("Motion clip", self.motion)
+        self.motion_label = QLabel("Motion clip")
+        f.addRow(self.motion_label, self.motion)
         f.addRow(self.cont)
         row = QHBoxLayout()
         self.start = QPushButton("Start training")
@@ -470,7 +472,17 @@ class TrainPanel(QWidget):
         self.seconds.setValue(float(p["episode_seconds"]))
         self.pop_label.setText("Population" if a in ("es", "ga") else "Parallel robots")
         self.gen_label.setText({"es": "Generations", "ga": "Generations", "distill": "Rounds"}.get(a, "Iterations"))
-        self.motion.setEnabled(a == "imitation")
+        self.motion.setEnabled(a in ("imitation", "skill"))
+        self.motion_label.setText("Skill" if a == "skill" else "Motion clip")
+        if a == "skill":
+            from ..skills import SKILLS
+            if self.motion.text() not in SKILLS:
+                self.motion.setText("uppercut")
+            self.motion.setToolTip("One of: " + ", ".join(SKILLS))
+            self.pop_label.setText("Candidates per generation")
+            self.gen_label.setText("Generations")
+        elif self.motion.text() in ("uppercut", "kick"):
+            self.motion.setText("walk")
 
     def _start(self) -> None:
         from ..jobs import make_trainer_for_session
@@ -479,7 +491,7 @@ class TrainPanel(QWidget):
             return
         d = {"algo": self.algo.currentData(), "name": self.name.text(), "population": self.population.value(),
              "generations": self.generations.value(), "lr": self.lr.value(), "threads": self.threads.value(),
-             "episode_seconds": self.seconds.value(), "motion": self.motion.text(),
+             "episode_seconds": self.seconds.value(), "motion": self.motion.text(), "skill": self.motion.text(),
              "continue_from_loaded": self.cont.isChecked()}
         try:
             self.trainer = make_trainer_for_session(self.sess, d)
@@ -504,6 +516,12 @@ class TrainPanel(QWidget):
             return
         path = Path(it.data(Qt.UserRole))
         try:
+            if path.name == "skill.tape.npz":
+                from .. import skills
+                self.studio.log(skills.play(self.sess, path))
+                self.studio.scene_changed()
+                self.studio.viewport.frame_robot()
+                return
             if path.name == "imitation_policy.npz":
                 self.sess.play_motion(None, "policy", str(path))
                 self.sess.policy_name = path.parent.name

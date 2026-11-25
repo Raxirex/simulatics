@@ -464,4 +464,77 @@ def play(session, tape: Tape | str | Path) -> str:
     return session.play_tape(tape)
 
 
+DATA = Path(__file__).resolve().parent / "data"
+
+
+def shipped() -> dict:
+    """Trained skills that come with Simulatics: {id: {"file", "title", "description", "report", "live"}}."""
+    p = DATA / "index.json"
+    return json.loads(p.read_text(encoding="utf-8")) if p.exists() else {}
+
+
+def verify_live(session, tape: Tape, settle: float = 6.0) -> dict:
+    """Play a trained skill in the live session and measure what happened there: whether the robot is still
+    standing after the balance controller took over, and how far every loose object was sent."""
+    play(session, tape)
+    session.speed = 8.0
+    falls0 = session.falls
+    with session.lock:
+        m = session.model
+        props = [b for b in range(m.nbody) if m.body(b).name.startswith("prop_")]
+        start = {b: session.data.xpos[b].copy() for b in props}
+    peak = {b: 0.0 for b in props}
+    far = {b: 0.0 for b in props}
+    names, t_end, still, up, speed = set(), None, 0, 1.0, 0.0
+    deadline = time.monotonic() + 90
+    while time.monotonic() < deadline:
+        with session.lock:
+            c, d = session.controller, session.data
+            names.add(c.name)
+            for b in props:
+                peak[b] = max(peak[b], float(d.xpos[b][2] - start[b][2]))
+                far[b] = max(far[b], float(np.linalg.norm(d.xpos[b][:2] - start[b][:2])))
+            if c.name != "motion-physical" and t_end is None:
+                t_end = float(d.time)
+            now, speed = float(d.time), float(np.linalg.norm(d.qvel[:3]))
+            up = float(d.xmat[1].reshape(3, 3)[2, 2])
+            falls = session.falls - falls0
+        if t_end is not None:
+            still = still + 1 if speed < 0.05 else 0
+            if now - t_end >= settle or (still > 300 and now - t_end > 1.5) or falls:
+                break
+        time.sleep(0.001)
+    with session.lock:
+        session.running = False
+    return {"ok": bool(t_end is not None and falls == 0 and up > 0.95 and speed < 0.1 and "walker" in names),
+            "falls_after": int(falls), "final_up": round(up, 3), "final_speed": round(speed, 3), "controllers": sorted(names),
+            "object_rise_m": round(max(peak.values(), default=0.0), 2), "object_travel_m": round(max(far.values(), default=0.0), 2)}
+
+
+def ship(tape_path: str | Path, log: Callable[[str], None] = print) -> dict:
+    """Verify a trained skill in a live session and, if it holds up, add it to the skills that come with
+    Simulatics (simulatics/skills/data). Returns the live report."""
+    from ..server.session import SimSession
+    tape = Tape.load(tape_path)
+    spec = SKILLS[tape.meta["skill"]]
+    s = SimSession()
+    try:
+        s.lidar_cfg.enabled = False
+        live = verify_live(s, tape)
+    finally:
+        s.shutdown()
+    log(f"{spec.id}: live check {'passed' if live['ok'] else 'FAILED'}  {live}")
+    if live["ok"]:
+        DATA.mkdir(parents=True, exist_ok=True)
+        tape.meta["live"] = live
+        tape.save(DATA / f"{spec.id}.tape.npz")
+        idx = shipped()
+        idx[spec.id] = {"file": f"{spec.id}.tape.npz", "title": spec.title, "description": spec.description,
+                        "report": tape.meta.get("report", {}), "live": live, "generations": tape.meta.get("generations"),
+                        "population": tape.meta.get("population"), "variations": tape.meta.get("variations"),
+                        "physics_steps": tape.meta.get("physics_steps")}
+        (DATA / "index.json").write_text(json.dumps(idx, indent=1), encoding="utf-8")
+    return live
+
+
 from .tasks import SKILLS  # noqa: E402,F401

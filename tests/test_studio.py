@@ -440,3 +440,83 @@ def test_mouse_orbit_pan_and_zoom_move_the_camera(app, win):
         assert not win.sess.data.xfrc_applied.any()
     win.sess.running = False
     v.set_tool("select")
+
+
+def test_motor_control_panel_drives_one_motor_on_the_stand(app, win):
+    settle(app, win)
+    win.apply_workspace("Motors")
+    spin(app, timeout=0.2)
+    mp = win.motor
+    assert mp.isVisible() and mp.motor.count() == win.sess.model.nu
+    mp.stand.setChecked(True)
+    spin(app, lambda: win.sess.support_stand and win.sess.controller.name == "manual", 5)
+    assert win.sess.controller.name == "manual"
+    mp.motor.setCurrentText("left_knee")
+    mp._select()
+    mp.target.spin.setValue(35.0)                       # degrees, typed exactly
+    i = mp._i()
+    assert abs(win.sess.manual_ctrl[i] - np.deg2rad(35.0)) < 1e-6
+    mp.kind.setCurrentIndex(mp.kind.findData("step"))
+    mp.amp.setValue(20.0)
+    win.sess.speed = 8.0
+    mp.run.click()
+    t0 = float(win.sess.data.time)
+    assert spin(app, lambda: win.sess.data.time - t0 > 1.5 and len(win.sess.motor_trace) > 40, 20)
+    mp.refresh()
+    assert "rise" in mp.metrics.text() and "peak torque" in mp.metrics.text()
+    assert mp.scope_angle.series is not None and len(mp.scope_angle.series["y"]["angle"]) > 40
+    kp0 = mp.gains["kp"].value()
+    mp.gains["kp"].setValue(kp0 + 50)
+    assert abs(win.sess.actuators()[i]["kp"] - (kp0 + 50)) < 1e-6
+    mp.gains["kp"].setValue(kp0)
+    mp.stop.click()
+    mp.stand.setChecked(False)
+    spin(app, lambda: win.sess.controller.name == "walker", 5)
+    assert win.sess.controller.name == "walker" and not win.sess.support_stand
+    win.sess.speed = 1.0
+    win.apply_workspace("Layout")
+
+
+def test_world_model_panel_runs_the_stand_in_on_an_instruction(app, win):
+    settle(app, win)
+    wm = win.world_model
+    win.show_dock("worldmodel")
+    assert "stand-in" in wm.model_name.text() and "Placeholder" in wm.findChildren(type(wm.state))[0].text()
+    wm.text.setText("walk to 1 0.5")
+    wm.send.click()
+    assert spin(app, lambda: len(win.sess.nav.goals) == 1, 5)
+    assert np.allclose(win.sess.nav.goals[0][0], [1.0, 0.5])
+    wm.refresh()
+    assert "walking to (1, 0.5)" in wm.log.toPlainText()
+    wm.instruct("stop")
+    assert spin(app, lambda: not win.sess.nav.goals, 5)
+    wm.stop.click()
+    assert not wm.runner.running
+    win.sess.running = False
+
+
+def test_training_panel_offers_skill_training(app, win):
+    tp = win.train
+    tp.algo.setCurrentIndex(tp.algo.findData("skill"))
+    tp._preset()
+    assert tp.motion.isEnabled() and tp.motion.text() == "uppercut" and tp.motion_label.text() == "Skill"
+    tp.algo.setCurrentIndex(tp.algo.findData("ppo"))
+    tp._preset()
+    assert tp.motion.text() == "walk" and not tp.motion.isEnabled()
+
+
+def test_samples_menu_runs_a_world_and_a_physical_motion(app, win):
+    from simulatics import samples
+    win.run_sample("kitchen")
+    spin(app, timeout=0.3)
+    assert len(win.sess.props) >= 5 and win.assets.acc.count() >= 1
+    win.sess.running = False
+    if "vertical_jump" in samples.physical():
+        win.run_sample("vertical_jump")
+        assert win.sess.controller.name == "motion-physical"
+        win.sess.speed = 8.0
+        assert spin(app, lambda: win.sess.controller.name == "walker", 60)
+        win.sess.speed = 1.0
+    win.sess.running = False
+    win.run_sample("stand")
+    win.sess.running = False
