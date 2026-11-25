@@ -291,7 +291,7 @@
   "verified": false,
   "survives_nudge": false,
   "duration_s": 5.66,
-  "seconds_to_find": 177.7,
+  "seconds_to_find": 165.9,
   "live": {
    "controllers": [
     "motion-physical",
@@ -302,10 +302,10 @@
    "final_speed": 0.0,
    "final_height_m": 1.084,
    "travel_m": 0.01,
-   "min_up": -0.9,
-   "flight_s": 0.42,
-   "com_rise_m": 0.048,
-   "rotation_rad": 5.85,
+   "min_up": -0.98,
+   "flight_s": 0.36,
+   "com_rise_m": 0.049,
+   "rotation_rad": 5.92,
    "drop_m": 0.04,
    "on_box": false,
    "ok": false,

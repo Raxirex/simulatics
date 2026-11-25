@@ -57,25 +57,48 @@ def _selftest(app, win, spec: str) -> None:
     from .. import __version__, samples
     ids = [s for s in spec.split(",") if s]
     report = {"version": __version__, "samples_available": len(samples.SAMPLES), "runs": []}
-    state = {"i": -1, "t0": 0.0}
+    state = {"i": -1, "t0": 0.0, "ended": None, "tape": 0.0, "falls": 0}
 
-    def step():
-        i = state["i"]
-        if i >= 0:
-            s = win.sess
-            win.viewport.grabFramebuffer().save(f"selftest_{ids[i]}.png")
-            report["runs"].append({"sample": ids[i], "sim_seconds": round(float(s.data.time), 2),
-                                   "fps": round(win.viewport._fps, 1), "controller": getattr(s.controller, "name", ""),
-                                   "falls": s.falls, "error": s.error, "log": win.log_panel.toPlainText().splitlines()[-1:]})
-        state["i"] = i = i + 1
+    def record() -> None:
+        i, s = state["i"], win.sess
+        win.viewport.grabFramebuffer().save(f"selftest_{ids[i]}.png")
+        with s.lock:
+            up = float(s.data.xmat[1].reshape(3, 3)[2, 2]) if s.model.nbody > 1 else 1.0
+            report["runs"].append({"sample": ids[i], "kind": samples.SAMPLES[ids[i]].kind if ids[i] in samples.SAMPLES else "?",
+                                   "sim_seconds": round(float(s.data.time), 2), "fps": round(win.viewport._fps, 1),
+                                   "controller": getattr(s.controller, "name", ""), "falls": s.falls - state["falls"],
+                                   "height_m": round(float(s.data.qpos[2]), 3), "upright": round(up, 3),
+                                   "speed": round(float((s.data.qvel[:3] ** 2).sum() ** 0.5), 3), "error": s.error,
+                                   "log": win.log_panel.toPlainText().splitlines()[-1:]})
+
+    def poll() -> None:
+        # a recorded physical motion: let it finish and give the balance controller time to settle
+        s = win.sess
+        playing = getattr(s.controller, "name", "") == "motion-physical"
+        if playing:
+            state["ended"] = None
+        elif state["ended"] is None:
+            state["ended"] = time.monotonic()
+        waited = time.monotonic() - state["t0"]
+        if (not playing and waited > 5.0 and time.monotonic() - state["ended"] > 6.0 * state["tape"]) or waited > 40.0:
+            record()
+            step()
+        else:
+            QTimer.singleShot(200, poll)
+
+    def step() -> None:
+        state["i"] = i = state["i"] + 1
         if i >= len(ids):
             with open("selftest.json", "w", encoding="utf-8") as f:
                 json.dump(report, f, indent=1)
             win.close()
             app.quit()
             return
+        state["falls"] = win.sess.falls
         win.run_sample(ids[i])
-        QTimer.singleShot(5000, step)
+        state["t0"], state["ended"] = time.monotonic(), None
+        state["tape"] = 1.0 if getattr(win.sess.controller, "name", "") == "motion-physical" else 0.0
+        QTimer.singleShot(200, poll)
     QTimer.singleShot(2500, step)
 
 

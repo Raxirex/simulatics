@@ -57,7 +57,8 @@ compatible with all of it. Audited 2026-11-18 from the installed package metadat
 
 ## Motion-capture data (not MIT)
 
-`simulatics/samples/data/*.npz` (the acrobatics and parkour reference clips) are derived from the CMU Graphics
+`simulatics/samples/data/*.npz` (the acrobatics and parkour reference clips, and the recorded motor commands
+made from them, `*.tape.npz`) are derived from the CMU Graphics
 Lab Motion Capture Database and remain under its terms, not this project's MIT licence: free for all uses,
 may be copied, modified, redistributed and included in commercial products, but the motion data itself may
 not be resold directly, even in converted form. Acknowledgment: the data used in this project was obtained

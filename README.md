@@ -83,19 +83,78 @@ Pushing a tag such as `v0.4.0` makes GitHub build the exe and publish the releas
 ### Samples
 
 Samples menu in Studio (or the Samples list in the Assets panel), and from Python
-`samples.run(session, "backflip")`. There are two kinds, and each sample says which it is:
+`samples.run(session, "backflip")`. Each sample says which kind it is:
 
 | Kind | Samples | What you are looking at |
 |---|---|---|
-| Physics | Stand and balance, Stand through pushes, Wave with one hand, Walk forward, Walk from point to point, Walk around obstacles, Climb stairs | The robot's own controllers in the physics simulation |
-| Reference motion | Backflip, Front flip, Front handspring, Stand on one hand, Handstand, Cartwheel, Jump onto a box, Jump down from a box, Jump a hurdle, Vertical jump, Broad jump | A human motion-capture take retargeted to the robot and played back pose by pose |
+| Physics, controllers | Stand and balance, Stand through pushes, Wave with one hand, Walk forward, Walk from point to point, Walk around obstacles, Climb stairs, Playground, Parkour course, Kitchen | The robot's own balance and walking controllers in the physics simulation |
+| Physics, recorded motor commands | Backflip, Vertical jump, Broad jump, Jump a hurdle, Jump onto a box, Jump down from a box | Motor commands only; gravity and contact do the rest (see below) |
+| Reference motion | Front flip, Front handspring, Cartwheel, Handstand, Stand on one hand, and the original take of each physical one | A motion-capture take played back pose by pose; not simulated |
 
-The reference motions are **not** physically simulated: the robot's controllers cannot flip or jump. They are
-there to look at and as targets for training a motion-tracking policy (Training panel, method "Motion
-imitation"). The boxes and the hurdle are placed from the take itself, where the performer's feet rested or
-cleared. The source database has no clean front flip, so that sample is the backflip reversed in time, next to
-a front handspring in which the hands touch down. The clips come from the CMU motion-capture database and keep
-its terms rather than MIT (`simulatics/samples/data/SOURCES.md`).
+### Physically simulated jumps and flips
+
+The acrobatic and parkour samples start from a motion-capture take, which is only a sequence of poses. The
+tracker in `simulatics/imitate/physical.py` finds motor commands that make the simulated robot perform it,
+by sampling-based control reconstruction (Liu et al., SIGGRAPH 2010): the take is cut into 0.1 s windows; in
+each, a few thousand candidate corrections to the servo targets are simulated in parallel from the states
+kept so far, and the ones that end closest to the take (pose, orientation, centre of mass, feet, balance)
+are kept. A clip takes one to three minutes on a laptop CPU. The result is a recording of motor commands.
+
+What "physical" means here, and what is tested for every one of them (`tests/test_physical.py`):
+
+- The robot starts standing at rest. While the motion plays, the controller writes motor commands and nothing
+  else: no pose is set, no force is applied, nothing holds the robot. Replaying the same commands with plain
+  `mj_step` reproduces the motion.
+- It really leaves the ground (measured from contacts) and, for the backflip, really turns over (6.25 rad).
+- When the recording ends, the balance controller takes over the robot as it stands, with no reset, and the
+  robot is upright and still. You can then send it walking.
+
+Limits you should know:
+
+- **Open loop.** A recording replays exactly on the robot and world it was made for, from its standing start.
+  It does not react to pushes, and it refuses to play on a different robot (changed dimensions, masses,
+  accessories or objects). Four of the six do not survive a start state nudged by a micrometre, so they may
+  not reproduce on a machine whose arithmetic differs in the last digit.
+- **Stronger motors for four of them.** Backflip and both box jumps use an "athletic" motor preset (hip 300,
+  knee 360, ankle 180, waist 200 Nm instead of 150, 180, 120, 100), set visibly in the Robot panel. Landing
+  a one-metre drop needs about 245 Nm per knee at this robot's 42 kg. Vertical jump, broad jump and hurdle
+  use the default motors.
+- **Servo interface.** During a recording the position servos may be commanded past the joint range, so
+  they can ask for their full torque at any angle; the torque limits themselves are unchanged.
+- **Not physical yet:** front flip (it rotates fully but falls on landing), cartwheel, front handspring,
+  handstand and the one-hand stand. These need arm strength and balance the tracker has not found. They
+  remain reference motions and are labelled so.
+- **The hurdle** is a standing jump over a bar as high as the simulated feet clear. The running take in the
+  source data starts mid-run, which a robot starting at rest cannot follow.
+
+Rebuild or add your own: `python -m simulatics.samples.build_physical` (all) or with clip names; add
+`--seed 2` to retry the ones that failed with another random draw.
+
+### Worlds
+
+Assets panel > World, or `session.load_world("kitchen")`:
+
+- **Playground:** a ramp and platform, stepping blocks, slalom posts, a tunnel, balls to kick, crates to push.
+- **Parkour course:** low random steps, stairs and a ramp down the middle (the walking controller crosses
+  them), with hurdles, jump boxes, a drop platform and a balance beam beside the lane.
+- **Kitchen:** a worktop with a cup, an apple and a butter box inside the arms' reach, a hob, sink,
+  cupboards, fridge, island and dining table.
+
+### Motor Control
+
+A panel (workspace "Motors") for driving one motor precisely: hold the robot on a stand with its feet off the
+floor, type a target to 0.01 degree, or run a step, sine, square or chirp timed by the simulation clock. A
+scope shows target, angle and torque recorded at every control step, with measured rise time, overshoot,
+error and time spent at the torque limit, and the motor's gains can be changed while it runs.
+
+### World Model (placeholder)
+
+A socket for a model that turns an instruction in words plus what the robot senses into action
+(`simulatics/worldmodel`, and the World Model panel). The interface is
+`act(observation, instruction) -> Action`, where an action is joint targets, a walking goal, or a named skill.
+**No trained world model is included.** The built-in stand-in only matches phrases ("walk to 2 1", "do a
+backflip", "jump onto the box", "stop") so the loop can be seen working. Loading your own model file runs
+its code on your machine, so only load files you trust.
 
 ## Run it (browser GUI)
 
@@ -214,6 +273,7 @@ simulatics/
   jobs.py                  training jobs shared by the browser GUI, Studio and graph nodes
   graph/                   node-graph engine (no Qt): typed ports, caching executor, built-in nodes
   samples/                 ready-made samples: physics set-ups and retargeted motion-capture clips
+  worldmodel/              world-model slot: interface, stand-in, runner (placeholder)
   studio/                  desktop workstation (PySide6): docking, viewport, tools, node editor
   bridge/                  ROS 2 bridge (rosbridge v2 client, rclpy backend, mock server)
   sim/                     locomotion tasks, vectorised environments, sensors, scenes and props

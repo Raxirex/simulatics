@@ -31,3 +31,9 @@ everything.
 | `hurdle.npz` | Jump a hurdle | subject 127 trial 25 | whole take |
 | `vertical_jump.npz` | Vertical jump | subject 16 trial 3 | whole take |
 | `broad_jump.npz` | Broad jump | subject 13 trial 11 | whole take |
+
+## Recorded motor commands (`*.tape.npz`)
+
+The `.tape.npz` files are motor commands found by tracking the clips above in the physics simulation
+(`python -m simulatics.samples.build_physical`). They are derived from the same CMU takes and stay under the
+same terms. `physical.json` lists which clip each one follows and what was measured when it was played.

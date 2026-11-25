@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "simulatics"
-version = "0.4.0"
+version = "0.5.0"
 description = "Humanoid robot workbench: MuJoCo physics, model-based walking, arms and hands, sensors, planning, CAD and topology optimisation, AI design search, PPO and evolution training, Claude-piloted missions"
 requires-python = ">=3.10"
 license = "MIT"
