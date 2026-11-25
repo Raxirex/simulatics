@@ -313,7 +313,7 @@ class SimSession:
             c.release(self.model)
 
     def _end_tape(self) -> None:
-        """The recorded motion is over: hand the robot, as it stands, to the balance controller."""
+        """Hand the robot, as it stands after a recorded motion, to the walking controller."""
         self._release_tape()
         self.controller_kind = "auto"
         new = self._make_controller()
@@ -323,6 +323,11 @@ class SimSession:
             new.reset(self.model, self.data)
         new.set_path(None)
         self.controller = new
+        goals = list(self.nav.goals)            # plan again for the new controller
+        self.nav.clear()
+        self.nav.take_new_path()
+        for i, (g, yaw) in enumerate(goals):
+            self.nav.set_goal(g, yaw, append=i > 0)
 
     def set_controller(self, kind: str) -> None:
         with self.lock:
@@ -719,8 +724,10 @@ class SimSession:
                 self._push = None
         mujoco.mj_step(m, d, max(1, int(round(c.control_dt / m.opt.timestep))))
         if getattr(c, "name", "") == "motion-physical":
-            # a recorded physical motion may be upside down on purpose (a flip): no fall check while it plays;
-            # when it ends the balance controller takes over the robot as it stands, and falls count again
+            # A recorded physical motion may be upside down on purpose (a flip): no fall check while it plays.
+            # When it ends the balance controller takes over the robot as it stands (no reset: it keeps its
+            # pose and speed), and falls count again. Holding the last command instead does not work: without
+            # balance feedback the robot topples within a second.
             if c.done:
                 self._end_tape()
             return

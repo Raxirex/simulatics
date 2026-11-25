@@ -1,0 +1,223 @@
+{
+ "vertical_jump": {
+  "file": "vertical_jump.tape.npz",
+  "clip": "vertical_jump",
+  "params": {},
+  "props": [],
+  "verified": true,
+  "survives_nudge": false,
+  "duration_s": 5.7,
+  "seconds_to_find": 52.6,
+  "live": {
+   "controllers": [
+    "motion-physical",
+    "walker"
+   ],
+   "falls_after": 0,
+   "final_up": 1.0,
+   "final_speed": 0.0,
+   "final_height_m": 1.123,
+   "travel_m": 0.09,
+   "min_up": 0.71,
+   "flight_s": 0.56,
+   "com_rise_m": 0.478,
+   "rotation_rad": 0.1,
+   "drop_m": 0.0,
+   "on_box": false,
+   "ok": true,
+   "why": []
+  },
+  "title": "Vertical jump",
+  "description": "A high jump on the spot.",
+  "source": "CMU Graphics Lab Motion Capture Database (mocap.cs.cmu.edu), subject 16 trial 3"
+ },
+ "broad_jump": {
+  "file": "broad_jump.tape.npz",
+  "clip": "broad_jump",
+  "params": {},
+  "props": [],
+  "verified": true,
+  "survives_nudge": true,
+  "duration_s": 5.74,
+  "seconds_to_find": 28.3,
+  "live": {
+   "controllers": [
+    "motion-physical",
+    "walker"
+   ],
+   "falls_after": 0,
+   "final_up": 1.0,
+   "final_speed": 0.0,
+   "final_height_m": 1.123,
+   "travel_m": 1.35,
+   "min_up": 0.75,
+   "flight_s": 0.32,
+   "com_rise_m": 0.214,
+   "rotation_rad": 0.05,
+   "drop_m": -0.0,
+   "on_box": false,
+   "ok": true,
+   "why": []
+  },
+  "title": "Broad jump",
+  "description": "A standing jump forwards.",
+  "source": "CMU Graphics Lab Motion Capture Database (mocap.cs.cmu.edu), subject 13 trial 11"
+ },
+ "hurdle": {
+  "file": "hurdle.tape.npz",
+  "clip": "broad_jump",
+  "params": {},
+  "props": [
+   {
+    "name": "hurdle",
+    "shape": "box",
+    "colour": "orange",
+    "rgba": [
+     0.95,
+     0.55,
+     0.15,
+     1.0
+    ],
+    "pos": [
+     0.4843664485628482,
+     0.05277309438279788
+    ],
+    "yaw": 0.19450888829522675,
+    "size": [
+     0.015,
+     0.6,
+     0.04
+    ]
+   }
+  ],
+  "verified": true,
+  "survives_nudge": true,
+  "duration_s": 5.74,
+  "seconds_to_find": 29.2,
+  "live": {
+   "controllers": [
+    "motion-physical",
+    "walker"
+   ],
+   "falls_after": 0,
+   "final_up": 1.0,
+   "final_speed": 0.0,
+   "final_height_m": 1.083,
+   "travel_m": 1.35,
+   "min_up": 0.75,
+   "flight_s": 0.32,
+   "com_rise_m": 0.214,
+   "rotation_rad": 0.05,
+   "drop_m": 0.04,
+   "on_box": false,
+   "ok": true,
+   "why": []
+  },
+  "title": "Jump a hurdle",
+  "description": "A standing jump forwards over a hurdle. The hurdle is as high as the simulated robot's feet clear (the running take in the reference set starts mid-run, which a robot starting at rest cannot follow).",
+  "source": "CMU Graphics Lab Motion Capture Database (mocap.cs.cmu.edu), subject 13 trial 11"
+ },
+ "box_jump_up": {
+  "file": "box_jump_up.tape.npz",
+  "clip": "box_jump_up",
+  "params": {
+   "hip_torque": 300.0,
+   "knee_torque": 360.0,
+   "ankle_torque": 180.0,
+   "abdomen_torque": 200.0,
+   "arm_torque": 80.0
+  },
+  "props": [
+   {
+    "name": "box 1",
+    "kind": "terrain",
+    "shape": "box",
+    "colour": "wood",
+    "rgba": [
+     0.72,
+     0.55,
+     0.36,
+     1.0
+    ],
+    "pos": [
+     0.8548365630097022,
+     0.019060833187570764
+    ],
+    "yaw": 0.0,
+    "size": [
+     0.5267962884214187,
+     0.5522096493987179,
+     0.3386466210066851
+    ]
+   }
+  ],
+  "verified": false,
+  "survives_nudge": false,
+  "duration_s": 4.02,
+  "seconds_to_find": 51.3,
+  "live": {
+   "controllers": [
+    "motion-physical",
+    "walker"
+   ],
+   "falls_after": 1,
+   "final_up": 1.0,
+   "final_speed": 0.0,
+   "final_height_m": 1.124,
+   "travel_m": 0.0,
+   "min_up": -0.09,
+   "flight_s": 0.5,
+   "com_rise_m": 0.455,
+   "rotation_rad": 1.42,
+   "drop_m": 0.0,
+   "on_box": false,
+   "ok": false,
+   "why": [
+    "did not end standing still and upright",
+    "com_rise_m is 0.455, needed at least 0.5",
+    "on_box is False, needed at least True"
+   ]
+  },
+  "title": "Jump onto a box",
+  "description": "A two-foot standing jump onto a platform about knee to hip high.",
+  "source": "CMU Graphics Lab Motion Capture Database (mocap.cs.cmu.edu), subject 88 trial 2"
+ },
+ "backflip": {
+  "file": "backflip.tape.npz",
+  "clip": "backflip",
+  "params": {
+   "hip_torque": 300.0,
+   "knee_torque": 360.0,
+   "ankle_torque": 180.0,
+   "abdomen_torque": 200.0,
+   "arm_torque": 80.0
+  },
+  "props": [],
+  "verified": true,
+  "survives_nudge": false,
+  "duration_s": 5.66,
+  "seconds_to_find": 69.0,
+  "live": {
+   "controllers": [
+    "motion-physical",
+    "walker"
+   ],
+   "falls_after": 0,
+   "final_up": 1.0,
+   "final_speed": 0.038,
+   "final_height_m": 1.123,
+   "travel_m": 0.73,
+   "min_up": -1.0,
+   "flight_s": 0.64,
+   "com_rise_m": 0.419,
+   "rotation_rad": 6.25,
+   "drop_m": 0.0,
+   "on_box": false,
+   "ok": true,
+   "why": []
+  },
+  "title": "Backflip",
+  "description": "A standing back somersault: jump, tuck, a full turn backwards, land on both feet.",
+  "source": "CMU Graphics Lab Motion Capture Database (mocap.cs.cmu.edu), subject 88 trial 1"
+ }
+}

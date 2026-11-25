@@ -64,15 +64,24 @@ def listing() -> list[dict]:
 
 
 # ------------------------------------------------------------------------------------------------ helpers
-def _builtin(session, obstacles: list[dict] | None = None) -> None:
-    """Built-in humanoid with default parameters, standing at the origin in the given world, walker in charge."""
+# Stronger motors for the acrobatic and parkour samples: landing from a metre or taking off for a flip needs more
+# torque than the default robot has (about 245 Nm per knee to absorb a 1 m drop at 42 kg; the default is 180).
+# These values are in the range of current full-size humanoids of similar mass. Applied visibly: the Robot
+# panel shows them.
+ATHLETIC = {"hip_torque": 300.0, "knee_torque": 360.0, "ankle_torque": 180.0, "abdomen_torque": 200.0,
+            "arm_torque": 80.0}
+
+
+def _builtin(session, obstacles: list[dict] | None = None, params: dict | None = None) -> None:
+    """Built-in humanoid (default parameters plus `params`), standing at the origin in the given world, walker
+    in charge."""
     from ..models import HumanoidParams
     with session.lock:
         session.running = False
         session.unload_policy()
         session.controller_kind = "auto"
         session.obstacles, session.props, session.cad_xml = list(obstacles or []), [], None
-        session.set_params(HumanoidParams().to_dict())      # rebuilds
+        session.set_params({**HumanoidParams().to_dict(), **(params or {})})      # rebuilds
         session.speed = 1.0
 
 
