@@ -52,6 +52,16 @@ the browser GUI:
 .venv\Scripts\python.exe -m simulatics studio
 ```
 
+- **Click to walk, and build the scene by clicking.** With the Select tool (the default), click the floor and
+  the robot plans a path and walks there. Pick an object in Assets > Build the scene (box, wall, pillar,
+  platform, step, ramp, table, jump box, hurdle, ball, crate, cube, cup), click the floor to drop it, click it
+  to edit its place, turn and size, drag it to move it, press Delete to remove it. The robot keeps its place
+  while the scene changes. File > Save Scene / Open Scene stores scenes as JSON.
+
+  ![A scene built by clicking, with the robot walking to a clicked point](docs/images/studio_build.png)
+- **Every panel resizes.** Drag any divider: panels shrink as far as you like (their content scrolls), so the
+  viewport can take as much of the window as you want. Ctrl+Space, or the frame button in the top bar, fills
+  the window with the viewport (or the panel under the mouse); press it again to go back.
 - **Dockable panels.** Viewport, Outliner, Inspector, Robot, Motors, Assets, Timeline, Node Graph, Results,
   Training, Sensors, AI Pilot, Python and Log can each be dragged, tabbed, floated or closed. Five workspaces
   (Layout, Graph, Train, Sensors, Animate; Alt+1 to Alt+5) rearrange them, and your own layouts can be saved.
@@ -107,7 +117,7 @@ Samples menu in Studio (or the Samples list in the Assets panel), and from Pytho
 | Physics, controllers | Stand and balance, Stand through pushes, Wave with one hand, Walk forward, Walk from point to point, Walk around obstacles, Climb stairs, Playground, Parkour course, Kitchen | The robot's own balance and walking controllers in the physics simulation |
 | Physics, recorded motor commands | Backflip, Vertical jump, Broad jump, Jump a hurdle, Jump onto a box, Jump down from a box | Motor commands only; gravity and contact do the rest (see below) |
 | Physics, trained skill | Uppercut | A move the robot learned by parallel search in physics (see Skill training) |
-| Reference motion | Front flip, Front handspring, Cartwheel, Handstand, Stand on one hand, and the original take of each physical one | A motion-capture take played back pose by pose; not simulated |
+| Reference motion | Front flip, Front handspring, Cartwheel, Handstand, Stand on one hand, and the original take of each physical one | A motion-capture take played back pose by pose, on repeat; not simulated. Click the floor and the robot stands up and walks there. |
 
 ### Physically simulated jumps and flips
 

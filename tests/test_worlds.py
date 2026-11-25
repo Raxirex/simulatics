@@ -208,3 +208,101 @@ def test_runner_loop_survives_a_broken_model_and_loads_models_from_files(sess, t
         load_world_model(bad)
     sess.nav.clear()
     sess.running = False
+
+
+# -------------------------------------------------------------------------- free scene building, no stuck motions
+def test_objects_are_added_edited_and_removed_while_the_robot_keeps_its_place(sess):
+    from simulatics.sim.builder import CATALOG
+    samples._builtin(sess)
+    sess.speed = 8.0
+    with sess.lock:
+        sess.nav.set_goal([1.0, 0.5])
+        sess.running = True
+    assert wait_for(lambda: sess.nav.state == "reached", 60)
+    made = {k: sess.add_object(k, 3.0 + 0.9 * (i % 4), -2.0 + 1.3 * (i // 4)) for i, k in enumerate(CATALOG)}
+    with sess.lock:
+        assert np.allclose(sess.data.qpos[:2], [1.0, 0.5], atol=0.03) and sess.controller.name == "walker"
+        assert len(sess.props) == 4 and len(sess.obstacles) == len(CATALOG) - 4 + 2            # a hurdle is three parts
+    assert sess.object_info(made["hurdle"])["parts"] == 3 and sess.object_info(made["ball"])["loose"]
+    assert sess.object_at(sess.object_info(made["box"])["geom"]) == made["box"] and sess.object_at(0) is None
+    info = sess.update_object(made["box"], x=2.0, y=2.0, yaw_deg=30.0, size=[0.3, 0.2, 0.4])
+    assert (info["x"], info["y"]) == (2.0, 2.0) and abs(info["yaw_deg"] - 30) < 1e-6 and info["size"] == [0.3, 0.2, 0.4]
+    before = [list(o["pos"]) for o in sess.obstacles if o["group"] == made["hurdle"]]
+    sess.update_object(made["hurdle"], x=before[0][0] + 0.5)
+    after = [list(o["pos"]) for o in sess.obstacles if o["group"] == made["hurdle"]]
+    assert all(abs(b[0] - a[0] - 0.5) < 1e-9 and abs(b[1] - a[1]) < 1e-9 for a, b in zip(before, after))   # moved as one
+    copy = sess.duplicate_object(made["crate"])
+    assert copy != made["crate"] and len(sess.props) == 5
+    sess.remove_object(made["wall"])
+    with pytest.raises(ValueError):
+        sess.remove_object(made["wall"])
+    with pytest.raises(ValueError, match="on top of the robot"):
+        sess.add_object("box", 1.05, 0.5)
+    with pytest.raises(ValueError, match="unknown object"):
+        sess.add_object("dragon", 5, 5)
+    scene = sess.scene_dict()
+    n = (len(sess.obstacles), len(sess.props))
+    samples._builtin(sess)
+    sess.load_scene(scene)
+    assert (len(sess.obstacles), len(sess.props)) == n
+    with pytest.raises(ValueError):
+        sess.load_scene({"kind": "something else"})
+    samples._builtin(sess)
+
+
+def test_the_robot_walks_through_a_scene_built_by_hand(sess):
+    samples._builtin(sess)
+    sess.add_object("box", 1.5, 0.0)
+    sess.add_object("pillar", 2.6, 0.9)
+    sess.add_object("step", 3.6, 0.0)
+    sess.speed = 8.0
+    falls = sess.falls
+    with sess.lock:
+        sess.nav.set_goal([4.6, 0.0])
+        sess.running = True
+    assert wait_for(lambda: sess.nav.state in ("reached", "failed", "fallen"), 150)
+    assert sess.nav.state == "reached" and sess.falls == falls and abs(sess.data.qpos[0] - 4.6) < 0.05
+    samples._builtin(sess)
+
+
+def test_reference_motions_replay_instead_of_freezing_and_a_goal_takes_over(sess):
+    samples.run(sess, "cartwheel")
+    assert sess.controller.name == "motion-preview"
+    sess.speed = 8.0
+    t0 = float(sess.data.time)
+    assert wait_for(lambda: sess.data.time - t0 > 9.0, 30)
+    assert sess.controller.replays >= 2                           # the clip played again (and again)
+    with sess.lock:
+        a = sess.data.qpos[7:25].copy()
+    time.sleep(0.4)
+    with sess.lock:
+        assert np.abs(sess.data.qpos[7:25] - a).max() > 0.01      # still moving, not stuck on the last frame
+        sess.nav.set_goal([1.0, 1.0])
+    falls = sess.falls
+    assert wait_for(lambda: sess.nav.state in ("reached", "failed", "fallen"), 90)
+    assert sess.nav.state == "reached" and sess.controller.name == "walker" and sess.falls == falls
+    assert np.linalg.norm(sess.data.qpos[:2] - [1.0, 1.0]) < 0.05              # it really walked there
+
+
+def test_a_goal_takes_over_from_the_wave_and_is_refused_on_top_of_a_box(sess):
+    samples.run(sess, "one_hand_wave")
+    sess.speed = 8.0
+    t0 = float(sess.data.time)
+    assert wait_for(lambda: sess.data.time - t0 > 2.0, 30)
+    with sess.lock:
+        sess.nav.set_goal([1.0, -0.6])
+    falls = sess.falls
+    assert wait_for(lambda: sess.nav.state in ("reached", "failed", "fallen"), 90)
+    assert sess.nav.state == "reached" and sess.controller.name == "walker" and sess.falls == falls
+    if "box_jump_up" in samples.physical() and samples.physical()["box_jump_up"]["verified"]:
+        samples.run(sess, "box_jump_up")
+        sess.speed = 8.0
+        assert wait_for(lambda: sess.controller.name == "walker" and sess.controller.status().get("mode") == "stand", 90)
+        time.sleep(1.0)
+        falls = sess.falls
+        with sess.lock:
+            sess.nav.set_goal([1.0, 2.0])
+        assert wait_for(lambda: sess.nav.state in ("failed", "reached", "fallen"), 30)
+        assert sess.nav.state == "failed" and "too high" in sess.nav.message and sess.falls == falls
+        assert float(sess.data.qpos[2]) > 1.5                                   # still standing on the box
+    samples._builtin(sess)

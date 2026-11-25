@@ -44,6 +44,12 @@ def _draw(name: str, p: QPainter, c: QColor) -> None:
         p.drawRect(QRectF(4, 9, 11, 11))
         p.drawLine(QPointF(18, 3), QPointF(18, 9))
         p.drawLine(QPointF(15, 6), QPointF(21, 6))
+    elif name == "build":                      # a cube with a plus
+        p.drawPolygon(_poly((4, 10), (11, 7), (18, 10), (11, 13)))
+        p.drawPolyline(_poly((4, 10), (4, 17), (11, 20), (18, 17), (18, 10)))
+        p.drawLine(QPointF(11, 13), QPointF(11, 20))
+        p.drawLine(QPointF(19, 2), QPointF(19, 7))
+        p.drawLine(QPointF(16.5, 4.5), QPointF(21.5, 4.5))
     elif name == "measure":                    # ruler
         p.drawPolygon(_poly((3, 17), (17, 3), (21, 7), (7, 21)))
         for i in range(4):

@@ -588,6 +588,160 @@ class SimSession:
             if not self.custom_path:
                 self.build()
 
+    # ---- free scene building (sim/builder.py) ---------------------------------------------------------------
+    def _rebuild_in_place(self) -> None:
+        """Rebuild after the scene changed, keeping the robot where it stands and loose things where they lie."""
+        with self.lock:
+            m, d = self.model, self.data
+            pose = base_pose(d) if self.task is not None else None
+            for i, o in enumerate(self.props):                     # what has been pushed around stays there
+                b = mujoco.mj_name2id(m, mujoco.mjtObj.mjOBJ_BODY, f"prop_{i}")
+                if b >= 0 and o.get("_placed"):
+                    o["pos"] = [float(v) for v in d.xpos[b]]
+            for o in self.props:
+                o["_placed"] = True
+            self.cad_xml = None
+            self.build()
+            if pose is not None and self.task is not None:
+                x, y, yaw = pose
+                self.data.qpos[0:2] = (x, y)
+                mujoco.mju_axisAngle2Quat(self.data.qpos[3:7], np.array([0.0, 0.0, 1.0]), yaw)
+                mujoco.mj_forward(self.model, self.data)
+                self.controller.reset(self.model, self.data)
+                self.reset_slam()
+            self.running = True
+
+    def add_object(self, kind: str, x: float, y: float, yaw: float = 0.0, scale: float = 1.0, colour: str = "blue") -> str:
+        """Drop a catalogue object (builder.CATALOG) at (x, y). Returns its group id."""
+        from ..sim import builder
+        if self.custom_path:
+            raise ValueError("scene building works around the built-in humanoid; load it first")
+        obstacles, props = builder.make(kind, x, y, yaw, scale, colour)
+        with self.lock:
+            if self.task is not None and np.hypot(x - self.data.qpos[0], y - self.data.qpos[1]) < 0.45 and obstacles \
+                    and all(o.get("kind") != "terrain" for o in obstacles):
+                raise ValueError("that is on top of the robot: place it a little further away")
+            builder.ensure_ids(self.obstacles, self.props)
+            self.obstacles = self.obstacles + obstacles
+            self.props = self.props + props
+            self._rebuild_in_place()
+        return (obstacles + props)[0]["group"]
+
+    def object_at(self, geom: int) -> str | None:
+        """Group id of the scene object a geom belongs to (None for the robot and the floor)."""
+        from ..sim import builder
+        with self.lock:
+            m = self.model
+            if not 0 <= geom < m.ngeom:
+                return None
+            builder.ensure_ids(self.obstacles, self.props)
+            name, body = m.geom(geom).name, m.body(int(m.geom_bodyid[geom])).name
+            if name.startswith("obj_") and name[4:].isdigit() and int(name[4:]) < len(self.obstacles):
+                return self.obstacles[int(name[4:])]["group"]
+            if body.startswith("prop_") and body[5:].isdigit() and int(body[5:]) < len(self.props):
+                return self.props[int(body[5:])]["group"]
+        return None
+
+    def object_info(self, group: str) -> dict:
+        from ..sim import builder
+        with self.lock:
+            parts = builder.members(self.obstacles, self.props, group)
+            if not parts:
+                raise ValueError("that object is no longer in the scene")
+            o = parts[0]
+            loose = any(o is q for q in self.props)
+            i = (self.props if loose else self.obstacles).index(o)
+            geom = mujoco.mj_name2id(self.model, mujoco.mjtObj.mjOBJ_GEOM, f"prop_{i}" if loose else f"obj_{i}")
+            pos = self.data.geom_xpos[geom][:2].tolist() if (loose and geom >= 0) else list(o["pos"][:2])
+            return {"group": group, "name": o.get("name", "object"), "made": o.get("made", ""), "loose": loose,
+                    "x": float(pos[0]), "y": float(pos[1]), "yaw_deg": float(np.rad2deg(o.get("yaw", 0.0))),
+                    "size": [float(v) for v in o["size"]], "shape": o.get("shape", "box"), "parts": len(parts),
+                    "walkable": o.get("kind") == "terrain", "mass": float(o.get("mass", 0.0)), "geom": int(geom),
+                    "resizable": len(parts) == 1 and "pitch" not in o}
+
+    def update_object(self, group: str, x: float | None = None, y: float | None = None, yaw_deg: float | None = None,
+                      size: list[float] | None = None) -> dict:
+        """Move, turn or resize a scene object, then rebuild."""
+        from ..sim import builder
+        with self.lock:
+            info = self.object_info(group)
+            parts = builder.members(self.obstacles, self.props, group)
+            if info["loose"]:
+                for o in parts:
+                    o["_placed"] = False                      # use the position being set, not where it lies now
+                    o["pos"] = [info["x"], info["y"], o["pos"][2]]
+            if x is not None or y is not None:
+                builder.move(parts, info["x"] if x is None else x, info["y"] if y is None else y)
+            if yaw_deg is not None:
+                builder.rotate(parts, float(np.deg2rad(yaw_deg)))
+            if size is not None and info["resizable"]:
+                o = parts[0]
+                new = [float(np.clip(v, 0.005, 5.0)) for v in size][:len(o["size"])]
+                if info["loose"]:
+                    o["pos"][2] += new[-1] - o["size"][-1] if o.get("shape") != "sphere" else new[0] - o["size"][0]
+                elif "z" in o:
+                    o["z"] = float(o["z"] + new[2] - o["size"][2])  # stays on whatever it stood on
+                o["size"] = new + list(o["size"][len(new):])
+            self._rebuild_in_place()
+            return self.object_info(group)
+
+    def remove_object(self, group: str) -> None:
+        with self.lock:
+            n = len(self.obstacles) + len(self.props)
+            self.obstacles = [o for o in self.obstacles if o.get("group") != group]
+            self.props = [o for o in self.props if o.get("group") != group]
+            if len(self.obstacles) + len(self.props) == n:
+                raise ValueError("that object is no longer in the scene")
+            self._rebuild_in_place()
+
+    def duplicate_object(self, group: str, dx: float = 0.6, dy: float = 0.0) -> str:
+        import copy
+        from ..sim import builder
+        with self.lock:
+            parts = builder.members(self.obstacles, self.props, group)
+            if not parts:
+                raise ValueError("that object is no longer in the scene")
+            new_group = builder.new_oid()
+            for o in parts:
+                c = copy.deepcopy(o)
+                c["oid"], c["group"] = builder.new_oid(), new_group
+                c["pos"] = [c["pos"][0] + dx, c["pos"][1] + dy, *c["pos"][2:]]
+                c.pop("_placed", None)
+                (self.props if any(o is q for q in self.props) else self.obstacles).append(c)
+            self._rebuild_in_place()
+        return new_group
+
+    def scene_dict(self) -> dict:
+        """The scene as plain data (for saving): where every object is right now."""
+        with self.lock:
+            props = []
+            for i, o in enumerate(self.props):
+                c = {k: v for k, v in o.items() if not k.startswith("_")}
+                b = mujoco.mj_name2id(self.model, mujoco.mjtObj.mjOBJ_BODY, f"prop_{i}")
+                if b >= 0:
+                    c["pos"] = [round(float(v), 4) for v in self.data.xpos[b]]
+                props.append(c)
+            return {"kind": "simulatics-scene", "version": 1,
+                    "obstacles": [{k: v for k, v in o.items() if not k.startswith("_")} for o in self.obstacles], "props": props}
+
+    def load_scene(self, scene: dict) -> None:
+        from ..sim import builder
+        if scene.get("kind") != "simulatics-scene":
+            raise ValueError("that file is not a Simulatics scene")
+        if self.custom_path:
+            raise ValueError("scenes are built around the built-in humanoid; load it first")
+        with self.lock:
+            self.obstacles = [dict(o) for o in scene.get("obstacles", [])]
+            self.props = [dict(o) for o in scene.get("props", [])]
+            for o in self.obstacles + self.props:              # ids from a file could collide with new ones
+                o.pop("oid", None)
+            groups: dict = {}
+            for o in self.obstacles + self.props:
+                g = o.pop("group", None)
+                o["oid"] = builder.new_oid()
+                o["group"] = groups.setdefault(g, builder.new_oid()) if g is not None else o["oid"]
+            self._rebuild_in_place()
+
     def clear_obstacles(self) -> None:
         with self.lock:
             self.obstacles, self.props, self.cad_xml = [], [], None

@@ -7,7 +7,8 @@ import threading
 
 from PySide6.QtCore import QByteArray, QObject, QSettings, QSize, Qt, QTimer, Signal
 from PySide6.QtGui import QAction, QActionGroup, QKeySequence
-from PySide6.QtWidgets import (QApplication, QComboBox, QDockWidget, QDoubleSpinBox, QFileDialog, QHBoxLayout,
+from PySide6.QtWidgets import (QApplication, QCheckBox, QComboBox, QDockWidget, QDoubleSpinBox, QFileDialog, QFrame,
+                               QHBoxLayout, QScrollArea,
                                QInputDialog, QLabel, QMainWindow, QMessageBox, QPushButton, QStackedWidget, QToolBar,
                                QWidget)
 
@@ -84,7 +85,18 @@ class StudioWindow(QMainWindow):
                 ("console", "Python", self.console), ("log", "Log", self.log_panel)):
             d = QDockWidget(title, self)
             d.setObjectName(f"dock_{key}")
-            d.setWidget(widget)
+            if key in ("viewport", "graph", "log"):
+                widget.setMinimumSize(80, 60)
+                d.setWidget(widget)
+            else:
+                # In a scroll area a panel can be made as small as you like (its content scrolls), so it never
+                # stops a neighbour, the viewport above all, from being made bigger.
+                area = QScrollArea()
+                area.setWidgetResizable(True)
+                area.setFrameShape(QFrame.NoFrame)
+                area.setMinimumSize(60, 40)
+                area.setWidget(widget)
+                d.setWidget(area)
             d.setAllowedAreas(Qt.AllDockWidgetAreas)
             self.docks[key] = d
 
@@ -97,6 +109,9 @@ class StudioWindow(QMainWindow):
         self.viewport.message.connect(self.say)
         self.viewport.sceneChanged.connect(self.scene_changed)
         self.viewport.toolChanged.connect(self._tool_changed)
+        self.viewport.objectPicked.connect(self._object_picked)
+        self._kept_object = ""
+        self._max_state = None
         self.outliner.selected.connect(lambda kind, ident: self.select(kind, ident, from_outliner=True))
 
         self.apply_workspace("Layout")
@@ -132,6 +147,9 @@ class StudioWindow(QMainWindow):
                                  tip="Centre the view on the robot or the selection (fits the graph when the graph has focus)")
         self.a_run = self._act("Run Graph", lambda: (self.show_dock("graph"), self.graph_panel.run()), "Ctrl+Return",
                                "run", tip="Execute the node graph")
+        self.a_max = self._act("Maximise Panel", self.toggle_maximise, "Ctrl+Space", "frame", checkable=False,
+                               tip="Fill the window with the viewport (or the panel under the mouse); again to go back")
+        self.a_delete = self._act("Delete Selected Object", self.delete_selected_object, "Delete")
         self.tool_group = QActionGroup(self)
         self.tool_actions: dict[str, QAction] = {}
         for key, (label, shortcut, tip) in TOOLS.items():
@@ -145,6 +163,10 @@ class StudioWindow(QMainWindow):
         m.addAction(self._act("New Graph", self.graph_panel.new, "Ctrl+N"))
         m.addAction(self._act("Open Graph...", self.graph_panel.open, "Ctrl+O"))
         m.addAction(self._act("Save Graph...", self.graph_panel.save, "Ctrl+S"))
+        m.addSeparator()
+        m.addAction(self._act("New Scene (empty world)", self.new_scene))
+        m.addAction(self._act("Open Scene...", self.open_scene))
+        m.addAction(self._act("Save Scene...", self.save_scene))
         m.addSeparator()
         m.addAction(self._act("Open Robot Model...", self.robot_panel._open_file))
         m.addAction(self._act("Export Robot as MJCF...", self.robot_panel._export))
@@ -167,9 +189,12 @@ class StudioWindow(QMainWindow):
         m = mb.addMenu("&Tools")
         for a in self.tool_actions.values():
             m.addAction(a)
+        m.addSeparator()
+        m.addAction(self.a_delete)
 
         m = mb.addMenu("&View")
         m.addAction(self.a_frame)
+        m.addAction(self.a_max)
         sub = m.addMenu("Look From")
         for i, name in enumerate(VIEWS):
             sub.addAction(self._act(name, lambda name=name: self.viewport.set_view(name), f"Ctrl+{i + 1}"))
@@ -251,6 +276,7 @@ class StudioWindow(QMainWindow):
         self.view_box.addItems(list(VIEWS))
         self.view_box.activated.connect(lambda _i: self.viewport.set_view(self.view_box.currentText()))
         top.addWidget(self.view_box)
+        top.addAction(self.a_max)
         top.addSeparator()
         top.addAction(self.a_run)
         spacer = QWidget()
@@ -304,6 +330,32 @@ class StudioWindow(QMainWindow):
         clear = QPushButton("Clear")
         clear.clicked.connect(lambda: setattr(self.viewport, "measure_pts", []))
         row(QLabel("Click two points."), clear)
+        from ..sim.builder import CATALOG, COLOURS
+        self.build_kind = QComboBox()
+        for key, (label, hint, _fn) in CATALOG.items():
+            self.build_kind.addItem(label, key)
+        self.build_kind.activated.connect(lambda _i: setattr(self.viewport, "build_kind", self.build_kind.currentData()))
+        self.build_scale = QDoubleSpinBox()
+        self.build_scale.setRange(0.25, 4.0)
+        self.build_scale.setSingleStep(0.25)
+        self.build_scale.setValue(1.0)
+        self.build_scale.setPrefix("size x")
+        self.build_scale.valueChanged.connect(lambda v: setattr(self.viewport, "build_scale", float(v)))
+        self.build_yaw = QDoubleSpinBox()
+        self.build_yaw.setRange(-180, 180)
+        self.build_yaw.setSingleStep(15)
+        self.build_yaw.setSuffix(" °")
+        self.build_yaw.valueChanged.connect(lambda v: setattr(self.viewport, "build_yaw", float(v)))
+        self.build_colour = QComboBox()
+        self.build_colour.addItems(COLOURS)
+        self.build_colour.setCurrentText("blue")
+        self.build_colour.activated.connect(lambda _i: setattr(self.viewport, "build_colour", self.build_colour.currentText()))
+        row(QLabel("Object"), self.build_kind, self.build_scale, QLabel("turned"), self.build_yaw, self.build_colour,
+            QLabel("  click the floor to drop it"))
+        self.touch_walk = QCheckBox("Click the floor to walk there")
+        self.touch_walk.setChecked(True)
+        self.touch_walk.toggled.connect(lambda on: setattr(self.viewport, "touch_walk", bool(on)))
+        row(self.touch_walk, QLabel("  click a part or an object to select it; drag an object to move it; Shift-click adds a waypoint"))
         opts.addWidget(self.opt_stack)
         self.addToolBarBreak(Qt.TopToolBarArea)
         self.addToolBar(Qt.TopToolBarArea, opts)
@@ -355,6 +407,92 @@ class StudioWindow(QMainWindow):
             self.outliner.show_body(body)
         self.inspector.show(kind, ident)
 
+    # ---- scene objects --------------------------------------------------------------------------------
+    def _show_object(self, group: str, info: dict) -> None:
+        self._kept_object = self.viewport.selected_object = group
+        r = max(info["size"][0], info["size"][1] if len(info["size"]) > 1 else info["size"][0]) * 1.5 + 0.12
+        self.viewport._mark = (info["x"], info["y"], min(r, 3.0))
+        self.inspector.show_object(group)
+        self.show_dock("inspector")
+
+    def _object_picked(self, group: str) -> None:
+        self.keep_object(group)
+
+    def keep_object(self, group: str) -> None:
+        """Select a scene object (or none) and keep it selected across the rebuild an edit causes."""
+        self._kept_object = group or ""
+        self._version = -1                      # force the panels to resync
+        self.scene_changed()
+
+    def delete_selected_object(self) -> None:
+        w = QApplication.focusWidget()
+        if w is not None and (w is self.graph_panel or self.graph_panel.isAncestorOf(w)):
+            self.graph_panel.scene.delete_selected()
+            return
+        if self._kept_object:
+            try:
+                self.sess.remove_object(self._kept_object)
+                self.log("Object removed")
+            except Exception as e:  # noqa: BLE001
+                self.log(str(e))
+            self.keep_object("")
+
+    def walk_to(self, x: float, y: float) -> None:
+        with self.sess.lock:
+            if self.sess.task is None:
+                self.log("This model cannot walk.")
+                return
+            self.sess.nav.set_goal([float(x), float(y)])
+            self.sess.running = True
+        self.say(f"Walking to ({x:.2f}, {y:.2f}) m")
+
+    def arm_build(self, kind: str) -> None:
+        self.viewport.build_kind = kind
+        self.build_kind.setCurrentIndex(max(0, self.build_kind.findData(kind)))
+        self.viewport.set_tool("build")
+
+    def new_scene(self) -> None:
+        try:
+            self.sess.clear_obstacles()
+        except Exception as e:  # noqa: BLE001
+            self.log(str(e))
+        self.keep_object("")
+
+    def save_scene(self) -> None:
+        import json
+        path, _ = QFileDialog.getSaveFileName(self, "Save scene", "scene.json", "Simulatics scene (*.json)")
+        if path:
+            with open(path, "w", encoding="utf-8") as f:
+                json.dump(self.sess.scene_dict(), f, indent=1)
+            self.log(f"Scene saved to {path}")
+
+    def open_scene(self, path: str | None = None) -> None:
+        import json
+        if not path:
+            path, _ = QFileDialog.getOpenFileName(self, "Open scene", "", "Simulatics scene (*.json)")
+        if not path:
+            return
+        try:
+            with open(path, encoding="utf-8") as f:
+                self.sess.load_scene(json.load(f))
+            self.log(f"Scene loaded from {path}")
+        except Exception as e:  # noqa: BLE001
+            self.log(f"Could not open that scene: {e}")
+        self.keep_object("")
+
+    def toggle_maximise(self, key: str | None = None) -> None:
+        """Fill the window with one panel (the one under the mouse, else the viewport); again restores the layout."""
+        if self._max_state is not None:
+            self.restoreState(self._max_state)
+            self._max_state = None
+            return
+        if key is None:
+            w = QApplication.widgetAt(self.cursor().pos())
+            key = next((k for k, d in self.docks.items() if w is not None and (d is w or d.isAncestorOf(w))), "viewport")
+        self._max_state = self.saveState()
+        for k, d in self.docks.items():
+            d.setVisible(k == key)
+
     def arm_place(self, acc_type: str) -> None:
         self.viewport.place_type = acc_type
         self.place_type.setCurrentIndex(max(0, self.place_type.findData(acc_type)))
@@ -390,9 +528,19 @@ class StudioWindow(QMainWindow):
         self.sensors.sync()
         self.motor.sync()
         self.world_model.sync()
-        self.inspector.show("scene", 0)
-        self.viewport.select_body(-1)
         self._fill_cameras()
+        group = self._kept_object
+        try:
+            info = self.sess.object_info(group) if group else None
+        except Exception:  # noqa: BLE001 - it was deleted
+            info = None
+        if info is not None:
+            self._show_object(group, info)
+        else:
+            self._kept_object = self.viewport.selected_object = ""
+            self.viewport._mark = None
+            self.inspector.show("scene", 0)
+            self.viewport.select_body(-1)
 
     # ---- simulation ---------------------------------------------------------------------------------
     def toggle_play(self) -> None:
@@ -424,8 +572,8 @@ class StudioWindow(QMainWindow):
         self.tool_actions[name].setChecked(True)
         self.st_tool.setText(f"Tool: {TOOLS[name][0]}")
         self.opt_label.setText(f" {TOOLS[name][0]} ")
-        self.opt_stack.setCurrentIndex({"push": 1, "place": 2, "measure": 3}.get(name, 0))
-        self.opt_hint.setText(TOOLS[name][2] if name not in ("push", "place", "measure") else "")
+        self.opt_stack.setCurrentIndex({"push": 1, "place": 2, "measure": 3, "build": 4, "select": 5}.get(name, 0))
+        self.opt_hint.setText(TOOLS[name][2] if name not in ("push", "place", "measure", "build", "select") else "")
 
     def _fill_cameras(self) -> None:
         cur = self.viewport.camera_name

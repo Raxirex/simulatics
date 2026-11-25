@@ -225,6 +225,71 @@ class InspectorPanel(QWidget):
         self.form.addStretch(1)
         self.refresh()
 
+    def show_object(self, group: str) -> None:
+        """Editor for a scene object (sim/builder.py): where it is, how big, and delete / duplicate."""
+        self._clear()
+        self.kind, self.ident = "object", 0
+        self.object_group = group
+        try:
+            info = self.sess.object_info(group)
+        except Exception as e:  # noqa: BLE001
+            self.form.addWidget(dim(str(e)))
+            self.form.addStretch(1)
+            return
+        sess, studio = self.sess, self.studio
+        self._title(info["name"], ("Loose object" if info["loose"] else "Static object")
+                    + (", ground the robot can walk on" if info["walkable"] else "")
+                    + (f", {info['parts']} parts" if info["parts"] > 1 else ""))
+
+        def apply(**kw):
+            try:
+                sess.update_object(group, **kw)
+            except Exception as e:  # noqa: BLE001
+                studio.log(f"Could not change it: {e}")
+            studio.keep_object(group)
+
+        f = self._group("Place")
+        xs, ys, yaw = _spin(info["x"], -50, 50, 3, 0.05), _spin(info["y"], -50, 50, 3, 0.05), _spin(info["yaw_deg"], -360, 360, 1, 5)
+        xs.editingFinished.connect(lambda: apply(x=xs.value()))
+        ys.editingFinished.connect(lambda: apply(y=ys.value()))
+        yaw.editingFinished.connect(lambda: apply(yaw_deg=yaw.value()))
+        f.addRow("x (m)", xs)
+        f.addRow("y (m)", ys)
+        f.addRow("Turn (°)", yaw)
+        if info["resizable"]:
+            f = self._group("Size")
+            labels = {"sphere": ["Radius (m)"], "cylinder": ["Radius (m)", "Height (m)"]}.get(info["shape"], ["Length (m)", "Width (m)", "Height (m)"])
+            half = info["size"]
+            idx = {"sphere": [0], "cylinder": [0, 1] if info["loose"] else [0, 2]}.get(info["shape"], [0, 1, 2])
+            spins = []
+            for label, i in zip(labels, idx):
+                full = half[i] if "Radius" in label else 2 * half[i]
+                sp = _spin(full, 0.01, 10, 3, 0.05)
+                f.addRow(label, sp)
+                spins.append((sp, i, "Radius" in label))
+
+            def resize():
+                new = list(half)
+                for sp, i, radius in spins:
+                    new[i] = sp.value() if radius else sp.value() / 2
+                if info["shape"] == "cylinder" and not info["loose"]:
+                    new[1] = new[0]
+                apply(size=new)
+            for sp, _i, _r in spins:
+                sp.editingFinished.connect(resize)
+        row = QHBoxLayout()
+        for label, fn in (("Duplicate", lambda: studio.keep_object(sess.duplicate_object(group))),
+                          ("Delete", lambda: (sess.remove_object(group), studio.keep_object(""))),
+                          ("Walk here", lambda: studio.walk_to(info["x"], info["y"]))):
+            b = QPushButton(label)
+            b.clicked.connect(lambda _=False, fn=fn: fn())
+            row.addWidget(b)
+        holder = QWidget()
+        holder.setLayout(row)
+        self.form.addWidget(holder)
+        self.form.addWidget(dim("Drag it in the viewport (Select tool) to move it. Delete key removes it."))
+        self.form.addStretch(1)
+
     def _scene(self, m) -> None:
         s = self.sess
         self._title(s.robot_name if s.custom_path else "Built-in humanoid", "Nothing selected: scene and physics")
@@ -570,6 +635,24 @@ class AssetsPanel(QWidget):
             b.clicked.connect(lambda _=False, fn=fn: self._world(fn))
             grid.addWidget(b, i // 2, i % 2)
         lay.addLayout(grid)
+
+        from ..sim.builder import CATALOG
+        lay.addWidget(heading("Build the scene"))
+        lay.addWidget(dim("Pick an object, then click the floor in the viewport to drop it. Click an object to edit "
+                          "it, drag it to move it."))
+        grid2 = QGridLayout()
+        for i, (key, (label, hint, _fn)) in enumerate(CATALOG.items()):
+            b = QPushButton(label)
+            b.setToolTip(hint)
+            b.clicked.connect(lambda _=False, key=key: self.studio.arm_build(key))
+            grid2.addWidget(b, i // 3, i % 3)
+        lay.addLayout(grid2)
+        row = QHBoxLayout()
+        for label, fn in (("Save scene...", lambda: self.studio.save_scene()), ("Open scene...", lambda: self.studio.open_scene())):
+            b = QPushButton(label)
+            b.clicked.connect(lambda _=False, fn=fn: fn())
+            row.addWidget(b)
+        lay.addLayout(row)
 
         lay.addWidget(heading("Accessories"))
         lay.addWidget(dim("Pick one, then click the robot in the viewport to mount it there."))

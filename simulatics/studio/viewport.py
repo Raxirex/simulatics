@@ -19,13 +19,14 @@ GL_READ_FRAMEBUFFER, GL_DRAW_FRAMEBUFFER, GL_FRAMEBUFFER = 0x8CA8, 0x8CA9, 0x8D4
 GL_COLOR_BUFFER_BIT, GL_NEAREST = 0x4000, 0x2600
 
 TOOLS = {
-    "select": ("Select", "Q", "Click a part to select it. Double-click to centre the view on it."),
+    "select": ("Select", "Q", "Click the floor: the robot walks there. Click a part or an object to select it; drag an object to move it."),
     "orbit": ("Orbit", "W", "Drag to orbit. Right-drag orbits and middle-drag pans with any tool; wheel zooms."),
     "goal": ("Walk to", "G", "Click the floor: the robot plans a path and walks there. Shift-click adds a waypoint."),
     "push": ("Push", "P", "Click a part to shove it away from the camera."),
     "grab": ("Grab", "B", "Drag a part to pull it with a spring. Shift-drag moves it horizontally."),
     "place": ("Place accessory", "A", "Click the robot to mount the chosen accessory there."),
     "measure": ("Measure", "M", "Click two points to measure the distance between them."),
+    "build": ("Add object", "O", "Click the floor to drop the chosen object there. It can then be selected, dragged, resized or deleted."),
 }
 VIEWS = {"Perspective": (135, -20), "Front": (180, 0), "Back": (0, 0), "Left": (-90, 0), "Right": (90, 0),
          "Top": (180, -89.9)}
@@ -52,6 +53,7 @@ class Viewport(QOpenGLWidget):
     message = Signal(str)
     sceneChanged = Signal()       # the model was rebuilt (after placing an accessory, for example)
     toolChanged = Signal(str)
+    objectPicked = Signal(str)    # group id of a scene object ("" = none)
     _move_takes_scene: bool | None = None
 
     def __init__(self, session, parent=None):
@@ -82,6 +84,12 @@ class Viewport(QOpenGLWidget):
         self.follow = False
         self.camera_name = "Free"
         self.measure_pts: list[np.ndarray] = []
+        self.touch_walk = True        # Select tool: a click on the floor is a walking goal
+        self.build_kind, self.build_scale, self.build_colour, self.build_yaw = "box", 1.0, "blue", 0.0
+        self.build_snap = 0.05
+        self.selected_object = ""
+        self._drag_object = ""
+        self._mark = None
         self._pushes: list[tuple[int, np.ndarray, float]] = []   # (body, force, end sim time)
         self._grab_body = -1
         self._last = None
@@ -233,6 +241,9 @@ class Viewport(QOpenGLWidget):
             mujoco.mjv_connector(g, mujoco.mjtGeom.mjGEOM_CAPSULE, width, np.asarray(a, float), np.asarray(b, float))
 
     def _overlays(self, path, goals) -> None:
+        if self.selected_object and self._mark is not None:        # a ring under the selected scene object
+            x, y, r = self._mark
+            self._geom(mujoco.mjtGeom.mjGEOM_CYLINDER, (r, 0.004, 0), (x, y, 0.006), (0.3, 0.6, 1.0, 0.55))
         if path is not None and len(path) > 1:
             for a, b in zip(path[:-1], path[1:]):
                 self._line((*a, 0.03), (*b, 0.03), 0.012, (0.3, 0.6, 1.0, 0.9))
@@ -332,6 +343,35 @@ class Viewport(QOpenGLWidget):
                                      pnt, geom, flex, skin)
         return int(body), pnt, int(geom[0])
 
+    def floor_point(self, x: float, y: float) -> np.ndarray | None:
+        """Where the view ray through widget position (x, y) meets the floor (z = 0); None if it does not."""
+        if self.scn is None:
+            return None
+        c0, c1 = self.scn.camera[0], self.scn.camera[1]
+        pos = (np.array(c0.pos) + np.array(c1.pos)) / 2
+        fwd, up = np.array(c0.forward, float), np.array(c0.up, float)
+        right = np.cross(fwd, up)
+        near = float(c0.frustum_near)
+        half_h = (float(c0.frustum_top) - float(c0.frustum_bottom)) / 2
+        half_w = float(c0.frustum_width) if float(c0.frustum_width) > 0 else half_h * self.width() / max(1, self.height())
+        cy = (float(c0.frustum_top) + float(c0.frustum_bottom)) / 2
+        cx = (float(c0.frustum_center) + float(c1.frustum_center)) / 2
+        nx, ny = 2 * x / max(1, self.width()) - 1, 1 - 2 * y / max(1, self.height())
+        d = fwd * near + right * (nx * half_w + cx) + up * (ny * half_h + cy)
+        if d[2] > -1e-9:
+            return None
+        return pos + d * (-pos[2] / d[2])
+
+    def _walk_to(self, point, append: bool) -> None:
+        s = self.sess
+        with s.lock:
+            if s.task is None:
+                self.message.emit("This model cannot walk (no free-floating body).")
+                return
+            s.nav.set_goal(point[:2], append=append)
+            s.running = True
+        self.message.emit(f"Walking to ({point[0]:.2f}, {point[1]:.2f}) m")
+
     def _camera_pos_forward(self):
         c0, c1 = self.scn.camera[0], self.scn.camera[1]
         return (np.array(c0.pos) + np.array(c1.pos)) / 2, np.array(c0.forward, float)
@@ -354,8 +394,33 @@ class Viewport(QOpenGLWidget):
         body, point, geom = self.pick(x, y)
         s, tool = self.sess, self.tool
         if tool in ("select", "orbit"):
-            self.selected = body if body > 0 else -1
-            self.bodyPicked.emit(self.selected)
+            group = s.object_at(geom) if geom >= 0 and not s.custom_path else None
+            if group:                                   # a scene object (static or loose)
+                self.selected = body if body > 0 else -1
+                self.selected_object = group
+                self.objectPicked.emit(group)
+            elif body > 0:                              # a part of the robot
+                self.selected, self.selected_object = body, ""
+                self.bodyPicked.emit(body)
+            elif body == 0 and tool == "select" and self.touch_walk:
+                self._walk_to(point, bool(mods & Qt.ShiftModifier))      # the floor (or ground to walk on)
+            else:
+                self.selected, self.selected_object = -1, ""
+                self.bodyPicked.emit(-1)
+        elif tool == "build":
+            p = point if body == 0 else self.floor_point(x, y)
+            if p is None:
+                self.message.emit("Click the floor to place it.")
+                return
+            k = self.build_snap
+            px, py = (round(p[0] / k) * k, round(p[1] / k) * k) if k > 0 else (p[0], p[1])
+            try:
+                group = s.add_object(self.build_kind, px, py, np.deg2rad(self.build_yaw), self.build_scale, self.build_colour)
+                self.selected_object = group
+                self.objectPicked.emit(group)
+                self.message.emit(f"Added a {self.build_kind.replace('_', ' ')} at ({px:.2f}, {py:.2f}) m")
+            except Exception as e:  # noqa: BLE001 - shown to the user
+                self.message.emit(f"Could not place it: {e}")
         elif tool == "goal":
             if body != 0:
                 self.message.emit("Click the floor to set a walking goal." if body < 0 else
@@ -409,6 +474,11 @@ class Viewport(QOpenGLWidget):
     def mousePressEvent(self, e) -> None:
         self._last = e.position()
         self._press = (e.position(), e.button())
+        self._drag_object = ""
+        if e.button() == Qt.LeftButton and self.tool == "select" and not (e.modifiers() & Qt.AltModifier) \
+                and not self.sess.custom_path:
+            _b, _p, g = self.pick(e.position().x(), e.position().y())
+            self._drag_object = (self.sess.object_at(g) or "") if g >= 0 else ""
         if e.button() == Qt.LeftButton and self.tool == "grab" and not (e.modifiers() & Qt.AltModifier):
             body, point, _ = self.pick(e.position().x(), e.position().y())
             if body > 0:
@@ -458,6 +528,19 @@ class Viewport(QOpenGLWidget):
             moved = (e.position() - self._press[0]).manhattanLength()
             if moved < 4 and not e.modifiers() & Qt.AltModifier:
                 self._click(e.position().x(), e.position().y(), e.modifiers())
+            elif moved >= 6 and self._drag_object:              # an object was dragged: put it down there
+                p = self.floor_point(e.position().x(), e.position().y())
+                if p is not None:
+                    k = self.build_snap
+                    px, py = (round(p[0] / k) * k, round(p[1] / k) * k) if k > 0 else (p[0], p[1])
+                    try:
+                        self.sess.update_object(self._drag_object, x=px, y=py)
+                        self.selected_object = self._drag_object
+                        self.objectPicked.emit(self._drag_object)
+                        self.message.emit(f"Moved to ({px:.2f}, {py:.2f}) m")
+                    except Exception as err:  # noqa: BLE001
+                        self.message.emit(f"Could not move it: {err}")
+        self._drag_object = ""
         self._press = self._last = None
 
     def mouseDoubleClickEvent(self, e) -> None:

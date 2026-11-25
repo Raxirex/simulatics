@@ -391,7 +391,10 @@ def test_tool_options_bar_follows_the_tool(app, win):
     win.arm_place("payload")
     assert win.opt_stack.currentIndex() == 2 and win.place_type.currentData() == "payload"
     win.viewport.set_tool("select")
+    assert win.opt_stack.currentIndex() == 5 and win.touch_walk.isChecked()
+    win.viewport.set_tool("orbit")
     assert win.opt_stack.currentIndex() == 0
+    win.viewport.set_tool("select")
 
 
 def test_mouse_orbit_pan_and_zoom_move_the_camera(app, win):
@@ -520,3 +523,101 @@ def test_samples_menu_runs_a_world_and_a_physical_motion(app, win):
     win.sess.running = False
     win.run_sample("stand")
     win.sess.running = False
+
+
+def test_click_the_floor_to_walk_and_build_a_scene_by_clicking(app, win, tmp_path):
+    from PySide6.QtCore import QEvent, QPointF
+    from PySide6.QtGui import QMouseEvent
+    from PySide6.QtWidgets import QDoubleSpinBox
+    settle(app, win)
+    win.new_scene()
+    spin(app, timeout=0.3)
+    v = win.viewport
+    v.set_tool("select")
+    # touch the floor: the robot walks there
+    v._click(*pixel_of(win, [1.2, 0.8, 0.0]), Qt.NoModifier)
+    assert len(win.sess.nav.goals) == 1 and np.linalg.norm(win.sess.nav.goals[0][0] - [1.2, 0.8]) < 0.08
+    win.sess.nav.clear()
+    win.touch_walk.setChecked(False)                         # switched off: a floor click only deselects
+    v._click(*pixel_of(win, [1.2, 0.8, 0.0]), Qt.NoModifier)
+    assert not win.sess.nav.goals
+    win.touch_walk.setChecked(True)
+    win.sess.running = False
+    # build: pick an object in the Assets panel, click the floor
+    win.arm_build("box")
+    assert v.tool == "build" and win.opt_stack.currentIndex() == 4 and win.build_kind.currentData() == "box"
+    win.build_scale.setValue(1.5)
+    v._click(*pixel_of(win, [0.6, 1.6, 0.0]), Qt.NoModifier)
+    spin(app, lambda: win._version == win.sess.scene_version, 3)
+    assert len(win.sess.obstacles) == 1
+    box = win.sess.obstacles[0]
+    assert np.allclose(box["pos"], [0.6, 1.6], atol=0.06) and abs(box["size"][0] - 0.375) < 1e-6
+    group = box["group"]
+    assert win._kept_object == group and win.inspector.kind == "object"          # selected and shown
+    win.arm_build("ball")
+    v._click(*pixel_of(win, [1.6, 0.5, 0.0]), Qt.NoModifier)
+    spin(app, timeout=0.3)
+    assert len(win.sess.props) == 1 and win.sess.props[0]["shape"] == "sphere"
+    # select the box by clicking it, edit it in the inspector
+    v.set_tool("select")
+    spin(app, timeout=0.3)
+    x, y = pixel_of(win, [0.6, 1.6, 0.3])
+    v._click(x, y, Qt.NoModifier)
+    assert win._kept_object == group and not win.sess.nav.goals             # an object click is not a walking goal
+    spin(app, timeout=0.2)
+    turn = [s for s in win.inspector.holder.findChildren(QDoubleSpinBox) if s.maximum() == 360][-1]
+    turn.setValue(45.0)
+    turn.editingFinished.emit()
+    spin(app, timeout=0.3)
+    assert abs(win.sess.object_info(group)["yaw_deg"] - 45.0) < 1e-6 and win._kept_object == group
+    # drag it across the floor
+    def mouse(kind, pos, button, buttons):
+        return QMouseEvent(kind, pos, v.mapToGlobal(pos), button, buttons, Qt.NoModifier)
+    a = QPointF(*pixel_of(win, [0.6, 1.6, 0.3]))
+    b = QPointF(*pixel_of(win, [1.3, 1.1, 0.0]))
+    v.mousePressEvent(mouse(QEvent.MouseButtonPress, a, Qt.LeftButton, Qt.LeftButton))
+    assert v._drag_object == group
+    v.mouseMoveEvent(mouse(QEvent.MouseMove, b, Qt.NoButton, Qt.LeftButton))
+    v.mouseReleaseEvent(mouse(QEvent.MouseButtonRelease, b, Qt.LeftButton, Qt.NoButton))
+    spin(app, timeout=0.3)
+    info = win.sess.object_info(group)
+    assert np.hypot(info["x"] - 1.3, info["y"] - 1.1) < 0.12 and v._mark is not None
+    # save, clear, load
+    import json
+    f = tmp_path / "scene.json"
+    f.write_text(json.dumps(win.sess.scene_dict()), encoding="utf-8")
+    win.delete_selected_object()
+    spin(app, timeout=0.3)
+    assert not win.sess.obstacles and win._kept_object == "" and win.inspector.kind == "scene"
+    win.open_scene(str(f))
+    spin(app, timeout=0.3)
+    assert len(win.sess.obstacles) == 1 and len(win.sess.props) == 1
+    win.new_scene()
+    spin(app, timeout=0.3)
+    assert not win.sess.obstacles and not win.sess.props
+    win.sess.running = False
+
+
+def test_every_panel_can_shrink_and_the_viewport_can_fill_the_window(app, win):
+    from PySide6.QtCore import Qt as Q
+    win.apply_workspace("Layout")
+    spin(app, timeout=0.3)
+    for key, d in win.docks.items():                          # no panel insists on being big
+        assert d.widget().minimumSizeHint().height() <= 200 and d.widget().minimumSize().width() <= 120, key
+    h0 = win.viewport.height()
+    win.resizeDocks([win.docks["viewport"], win.docks["timeline"]], [win.height() - 120, 60], Q.Vertical)
+    spin(app, timeout=0.3)
+    assert win.viewport.height() > h0 + 100                    # the bottom panels gave way
+    w0 = win.viewport.width()
+    win.resizeDocks([win.docks["outliner"], win.docks["viewport"], win.docks["inspector"]], [70, win.width(), 70], Q.Horizontal)
+    spin(app, timeout=0.3)
+    assert win.viewport.width() > w0 + 200
+    win.toggle_maximise("viewport")
+    spin(app, timeout=0.3)
+    assert [k for k, d in win.docks.items() if d.isVisible()] == ["viewport"]
+    assert win.viewport.height() > 0.8 * win.centralWidget().height() if win.centralWidget() else win.viewport.height() > 0.75 * win.height()
+    assert win.viewport.grabFramebuffer().width() > 0.9 * win.width() * win.devicePixelRatioF() - 80
+    win.toggle_maximise()
+    spin(app, timeout=0.3)
+    assert win.docks["outliner"].isVisible() and win.docks["inspector"].isVisible()
+    win.apply_workspace("Layout")
