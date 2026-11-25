@@ -290,8 +290,8 @@
   "props": [],
   "verified": false,
   "survives_nudge": false,
-  "duration_s": 5.66,
-  "seconds_to_find": 158.4,
+  "duration_s": 7.26,
+  "seconds_to_find": 209.7,
   "live": {
    "controllers": [
     "motion-physical",
@@ -302,16 +302,16 @@
    "final_speed": 0.0,
    "final_height_m": 1.124,
    "travel_m": 0.0,
-   "min_up": -0.87,
-   "flight_s": 0.38,
-   "com_rise_m": 0.047,
-   "rotation_rad": 5.29,
+   "min_up": -0.9,
+   "flight_s": 0.34,
+   "com_rise_m": 0.056,
+   "rotation_rad": 5.34,
    "drop_m": -0.0,
    "on_box": false,
    "ok": false,
    "why": [
     "did not end standing still and upright",
-    "rotation_rad is 5.29, needed at least 5.5"
+    "rotation_rad is 5.34, needed at least 5.5"
    ]
   },
   "title": "Front flip",
@@ -331,8 +331,8 @@
   "props": [],
   "verified": false,
   "survives_nudge": false,
-  "duration_s": 4.88,
-  "seconds_to_find": 102.8,
+  "duration_s": 6.48,
+  "seconds_to_find": 196.5,
   "live": {
    "controllers": [
     "motion-physical",
@@ -343,10 +343,10 @@
    "final_speed": 0.0,
    "final_height_m": 1.084,
    "travel_m": 0.01,
-   "min_up": -0.96,
+   "min_up": -0.94,
    "flight_s": 0.08,
    "com_rise_m": 0.0,
-   "rotation_rad": 5.03,
+   "rotation_rad": 5.98,
    "drop_m": 0.14,
    "on_box": false,
    "ok": false,

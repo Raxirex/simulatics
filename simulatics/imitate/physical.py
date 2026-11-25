@@ -348,6 +348,50 @@ class Tracker:
             out.append(d.qpos.copy())
         return np.array(out)
 
+    def settle_to(self, qpos: np.ndarray, qvel: np.ndarray, q_stand: np.ndarray, blend: float = 0.6,
+                  hold: float = 1.2, log=None) -> tuple[np.ndarray, np.ndarray, float]:
+        """Commands that bring the robot from any moving state back to a standing pose and keep it there, with
+        balance (the same windowed search as track()). Returns (ctrl (n, nu), simulated qpos (n + 1, nq), cost).
+        Used to end a trained move in the stance the balance controller takes over from."""
+        c, m, qa = self.cfg, self.model, self.qa
+        dt = c.control_steps * float(m.opt.timestep)
+        target = np.array(qpos, float)                      # everything that is not the robot stays as it is
+        nrobot = [int(m.jnt_qposadr[j]) for j in range(m.njnt) if m.body_rootid[m.jnt_bodyid[j]] == m.body_rootid[1]
+                  and m.jnt_type[j] != mujoco.mjtJoint.mjJNT_FREE]
+        target[nrobot] = q_stand[nrobot]
+        target[qa:qa + 7] = q_stand[qa:qa + 7]
+        qref = np.concatenate([np.array(qpos, float)[None], _blend(np.array(qpos, float), target, max(1, int(round(blend / dt))), qa),
+                               np.repeat(target[None], max(1, int(round(hold / dt))), axis=0)])
+        fref = self.ref_features(qref)
+        d = self.scratch
+        mujoco.mj_resetData(m, d)
+        d.qpos[:] = qpos
+        d.qvel[:] = qvel
+        mujoco.mj_forward(m, d)
+        s0 = np.zeros(self.nstate)
+        mujoco.mj_getState(m, d, s0, STATE)
+        n_cmd = len(qref) - 1
+        n_win = int(np.ceil(n_cmd / c.window))
+        best, best_cost = None, np.inf
+        for p in range(c.passes):
+            delta, cost, per_window = self._pass(s0, qref, fref, np.zeros((n_win, m.nu)), self.sigma.copy(),
+                                                 np.random.default_rng(c.seed + 100 + p), log)
+            if cost < best_cost:
+                best, best_cost = delta, cost
+            if per_window[-1] < c.good_enough:
+                break
+        targets = np.clip(self._targets(qref) + np.repeat(best, c.window, axis=0)[:n_cmd], self.lo, self.hi)
+        dp = mujoco.MjData(self.plain)
+        dp.qpos[:] = qpos
+        dp.qvel[:] = qvel
+        mujoco.mj_forward(self.plain, dp)
+        states = [dp.qpos.copy()]
+        for u in targets:
+            dp.ctrl[:] = u
+            mujoco.mj_step(self.plain, dp, c.control_steps)
+            states.append(dp.qpos.copy())
+        return targets, np.array(states), best_cost
+
     def track(self, motion: Motion, qpos0: np.ndarray, qvel0: np.ndarray | None = None, name: str = "",
               log=None) -> Tape:
         c, m = self.cfg, self.model

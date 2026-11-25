@@ -72,7 +72,8 @@ ATHLETIC = {"hip_torque": 300.0, "knee_torque": 360.0, "ankle_torque": 180.0, "a
             "arm_torque": 80.0}
 
 
-def _builtin(session, obstacles: list[dict] | None = None, params: dict | None = None) -> None:
+def _builtin(session, obstacles: list[dict] | None = None, params: dict | None = None,
+             props: list[dict] | None = None) -> None:
     """Built-in humanoid (default parameters plus `params`), standing at the origin in the given world, walker
     in charge."""
     from ..models import HumanoidParams
@@ -81,7 +82,7 @@ def _builtin(session, obstacles: list[dict] | None = None, params: dict | None =
         session.unload_policy()
         session.controller_kind = "auto"
         session.support_stand = False
-        session.obstacles, session.props, session.cad_xml = list(obstacles or []), [], None
+        session.obstacles, session.props, session.cad_xml = list(obstacles or []), list(props or []), None
         session.set_params({**HumanoidParams().to_dict(), **(params or {})})      # rebuilds
         session.speed = 1.0
 

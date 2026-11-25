@@ -38,10 +38,10 @@ PHYSICAL: dict[str, dict] = {
     "box_jump_up": {"params": ATHLETIC, "platform": (0.5, 0.3), "cfg": {"samples": 1800, "keep": 120, "passes": 5}, "need": {"flight_s": 0.2, "com_rise_m": 0.5, "on_box": True}},
     "box_jump_down": {"params": ATHLETIC, "end": 1.45, "cfg": {"lead_out": 0.9, "samples": 1800, "keep": 120, "passes": 5}, "need": {"flight_s": 0.3, "drop_m": 0.5}},
     "backflip": {"params": ATHLETIC, "need": {"flight_s": 0.4, "rotation_rad": 5.5, "min_up": -0.8}},
-    "front_flip": {"params": ATHLETIC, "cfg": {"samples": 2000, "keep": 120, "passes": 4},
+    "front_flip": {"params": ATHLETIC, "cfg": {"samples": 2000, "keep": 120, "passes": 4, "hold": 2.5, "lead_out": 0.9},
                    "need": {"flight_s": 0.3, "rotation_rad": 5.5, "min_up": -0.8}},
-    "cartwheel": {"params": {**ATHLETIC, "arm_torque": 150.0}, "cfg": {"samples": 2000, "keep": 120, "passes": 3},
-                  "need": {"rotation_rad": 5.0, "min_up": -0.7}},
+    "cartwheel": {"params": {**ATHLETIC, "arm_torque": 150.0}, "cfg": {"samples": 2000, "keep": 120, "passes": 3, "hold": 2.5, "lead_out": 0.9},
+                  "need": {"rotation_rad": 4.8, "min_up": -0.7}},
 }
 
 
