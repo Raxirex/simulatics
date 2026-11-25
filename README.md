@@ -150,7 +150,14 @@ Trained policies (double-click to play it).
 **The demo: an uppercut.** A ball sits on a tee at chest height. The reward is how high the ball is sent, the
 upward speed of the fist at contact, and still standing where you started. Training on this laptop's CPU
 (about 100,000 physics steps per second across 16 threads) takes six to ten minutes. The shipped result is the
-"Uppercut (trained)" sample; its measured numbers are in `simulatics/skills/data/index.json`.
+"Uppercut (trained)" sample; its measured numbers are in `simulatics/skills/data/index.json` (160 generations
+of 320 candidates on 3 varied starts each, 49 million physics steps: the fist meets the ball at 5 m/s and the
+ball goes 1.6 m up; the robot stays on its feet in 23 of 24 varied starts).
+
+![The trained uppercut, frame by frame](docs/images/uppercut.png)
+
+It is not a textbook punch: the search found that leaning in nudges the ball off the tee and the rising fist
+then catches it. Nothing told it how to punch, only what counts as a good result.
 
 A new skill is a few lines:
 
