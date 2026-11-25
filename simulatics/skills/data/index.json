@@ -1,0 +1,42 @@
+{
+ "uppercut": {
+  "file": "uppercut.tape.npz",
+  "title": "Uppercut",
+  "description": "A rising punch with the right fist that knocks a ball off a tee at chest height, keeping both feet planted and ending back in the standing pose.",
+  "report": {
+   "reward": 12.902350606459757,
+   "reward_over_24_varied_starts": {
+    "min": -17.372653596259397,
+    "mean": 7.639174677553872
+   },
+   "stayed_standing_of_24": 23,
+   "final_up": 0.9776341363751773,
+   "feet_moved_m": 0.1265467951670003,
+   "end_speed": 0.2615576643277727,
+   "return_to_stance_cost": 0.8560623707734493,
+   "final_height_error_m": 0.006374528920182421,
+   "ball_rise_m": 1.594172381887075,
+   "ball_launch_speed_mps": 5.741406014997053,
+   "fist_speed_at_contact_mps": 5.026852896260017,
+   "fist_upward_speed_at_contact_mps": 4.227579944537295,
+   "contact_time_s": 0.86,
+   "closest_fist_to_ball_m": 0.08149912899879151
+  },
+  "live": {
+   "ok": true,
+   "falls_after": 0,
+   "final_up": 1.0,
+   "final_speed": 0.0,
+   "controllers": [
+    "motion-physical",
+    "walker"
+   ],
+   "object_rise_m": 1.59,
+   "object_travel_m": 33.86
+  },
+  "generations": 160,
+  "population": 320,
+  "variations": 3,
+  "physics_steps": 49160000
+ }
+}
