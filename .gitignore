@@ -22,3 +22,6 @@ MUJOCO_LOG.TXT
 robots/
 dist/
 build/
+/SimulaticsStudio.exe
+/SimulaticsStudio.version
+/SimulaticsStudio.part

@@ -21,6 +21,23 @@ desktop workstation (Simulatics Studio, Qt) and a browser GUI served from the lo
 
 `docs/METHODS.md` maps each method from the literature, with its paper, to the module that implements it.
 
+## Quick start
+
+From a checkout, one command sets everything up and starts the app (on Windows, double-click `run.bat`):
+
+```bash
+python run.py
+```
+
+| Command | What it does |
+|---|---|
+| `python run.py` | Starts Simulatics Studio from this source. The first start creates `.venv` and installs the dependencies (a few minutes). |
+| `python run.py exe` | Downloads the latest released `SimulaticsStudio.exe` next to the script and runs it. No Python packages needed. |
+| `python run.py web` | Starts the browser GUI instead. |
+| `python run.py update` | `git pull`, then starts Studio. |
+
+Once it is open, try Samples > Acrobatics > Backflip, or Samples > Trained skills > Uppercut.
+
 ## Simulatics Studio (desktop workstation)
 
 ![Simulatics Studio: a node graph that loads the robot, adds obstacles, walks it to a goal and plots the path](docs/images/studio_graph.png)
