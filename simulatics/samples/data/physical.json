@@ -291,7 +291,7 @@
   "verified": false,
   "survives_nudge": false,
   "duration_s": 5.66,
-  "seconds_to_find": 166.5,
+  "seconds_to_find": 177.7,
   "live": {
    "controllers": [
     "motion-physical",
@@ -300,13 +300,13 @@
    "falls_after": 1,
    "final_up": 1.0,
    "final_speed": 0.0,
-   "final_height_m": 1.124,
-   "travel_m": 0.0,
-   "min_up": -0.87,
-   "flight_s": 0.4,
-   "com_rise_m": 0.056,
-   "rotation_rad": 6.62,
-   "drop_m": 0.0,
+   "final_height_m": 1.084,
+   "travel_m": 0.01,
+   "min_up": -0.9,
+   "flight_s": 0.42,
+   "com_rise_m": 0.048,
+   "rotation_rad": 5.85,
+   "drop_m": 0.04,
    "on_box": false,
    "ok": false,
    "why": [
@@ -331,7 +331,7 @@
   "verified": false,
   "survives_nudge": false,
   "duration_s": 4.88,
-  "seconds_to_find": 114.0,
+  "seconds_to_find": 118.0,
   "live": {
    "controllers": [
     "motion-physical",
@@ -342,16 +342,15 @@
    "final_speed": 0.0,
    "final_height_m": 1.124,
    "travel_m": 0.0,
-   "min_up": -0.96,
-   "flight_s": 0.06,
+   "min_up": -0.95,
+   "flight_s": 0.08,
    "com_rise_m": 0.0,
-   "rotation_rad": 4.96,
+   "rotation_rad": 5.17,
    "drop_m": 0.1,
    "on_box": false,
    "ok": false,
    "why": [
-    "did not end standing still and upright",
-    "rotation_rad is 4.96, needed at least 5.0"
+    "did not end standing still and upright"
    ]
   },
   "title": "Cartwheel",

@@ -29,7 +29,8 @@ def sess():
 
 def test_listing_names_the_kinds_the_user_asked_for():
     ids = set(samples.SAMPLES)
-    assert {"stand", "stand_pushes", "one_hand_wave", "walk_forward", "walk_points", "walk_around", "stairs"} <= ids
+    assert {"stand", "stand_pushes", "one_hand_wave", "walk_forward", "walk_points", "walk_around", "stairs",
+            "playground", "parkour_course", "kitchen"} <= ids
     for s in samples.SAMPLES.values():
         assert s.kind in ("physics", "reference") and s.title and s.description and s.group
         assert s.kind == "physics" or s.source, f"{s.id}: a reference clip must say where it comes from"
@@ -84,7 +85,7 @@ REFERENCE = [s.id for s in samples.SAMPLES.values() if s.kind == "reference"]
 @pytest.mark.parametrize("sid", REFERENCE)
 def test_reference_clip_plays_without_falling_or_sinking(sess, sid):
     from simulatics.imitate import load_motion
-    clip = samples.manifest()[sid]
+    clip = samples.manifest()[sid.removesuffix("_reference")]
     motion = load_motion(str(samples.DATA / clip["file"]))
     assert 0.5 < motion.duration < 20 and np.isfinite(motion.root_pos).all() and np.isfinite(motion.joint_pos).all()
     msg = samples.run(sess, sid)
