@@ -154,7 +154,7 @@
   "verified": false,
   "survives_nudge": false,
   "duration_s": 4.02,
-  "seconds_to_find": 51.3,
+  "seconds_to_find": 28.6,
   "live": {
    "controllers": [
     "motion-physical",
@@ -162,25 +162,85 @@
    ],
    "falls_after": 1,
    "final_up": 1.0,
-   "final_speed": 0.0,
+   "final_speed": 0.05,
    "final_height_m": 1.124,
    "travel_m": 0.0,
-   "min_up": -0.09,
-   "flight_s": 0.5,
-   "com_rise_m": 0.455,
-   "rotation_rad": 1.42,
-   "drop_m": 0.0,
+   "min_up": 0.39,
+   "flight_s": 0.3,
+   "com_rise_m": 0.736,
+   "rotation_rad": 0.01,
+   "drop_m": -0.0,
    "on_box": false,
    "ok": false,
    "why": [
     "did not end standing still and upright",
-    "com_rise_m is 0.455, needed at least 0.5",
     "on_box is False, needed at least True"
    ]
   },
   "title": "Jump onto a box",
   "description": "A two-foot standing jump onto a platform about knee to hip high.",
   "source": "CMU Graphics Lab Motion Capture Database (mocap.cs.cmu.edu), subject 88 trial 2"
+ },
+ "box_jump_down": {
+  "file": "box_jump_down.tape.npz",
+  "clip": "box_jump_down",
+  "params": {
+   "hip_torque": 300.0,
+   "knee_torque": 360.0,
+   "ankle_torque": 180.0,
+   "abdomen_torque": 200.0,
+   "arm_torque": 80.0
+  },
+  "props": [
+   {
+    "name": "box 1",
+    "kind": "terrain",
+    "shape": "box",
+    "colour": "wood",
+    "rgba": [
+     0.72,
+     0.55,
+     0.36,
+     1.0
+    ],
+    "pos": [
+     -0.067095937694771,
+     -0.016044181576071792
+    ],
+    "yaw": 0.0,
+    "size": [
+     0.24009279322511157,
+     0.27615836707214375,
+     0.41047409925601475
+    ]
+   }
+  ],
+  "verified": true,
+  "survives_nudge": false,
+  "duration_s": 4.04,
+  "seconds_to_find": 158.8,
+  "live": {
+   "controllers": [
+    "motion-physical",
+    "walker"
+   ],
+   "falls_after": 0,
+   "final_up": 1.0,
+   "final_speed": 0.0,
+   "final_height_m": 1.123,
+   "travel_m": 2.05,
+   "min_up": 0.57,
+   "flight_s": 0.66,
+   "com_rise_m": 0.271,
+   "rotation_rad": 0.18,
+   "drop_m": 0.81,
+   "on_box": false,
+   "ok": true,
+   "why": []
+  },
+  "title": "Jump down from a box",
+  "description": "Steps off a ledge and lands in a deep squat.",
+  "source": "CMU Graphics Lab Motion Capture Database (mocap.cs.cmu.edu), subject 82 trial 4"
  },
  "backflip": {
   "file": "backflip.tape.npz",
@@ -218,6 +278,46 @@
   },
   "title": "Backflip",
   "description": "A standing back somersault: jump, tuck, a full turn backwards, land on both feet.",
+  "source": "CMU Graphics Lab Motion Capture Database (mocap.cs.cmu.edu), subject 88 trial 1"
+ },
+ "front_flip": {
+  "file": "front_flip.tape.npz",
+  "clip": "front_flip",
+  "params": {
+   "hip_torque": 300.0,
+   "knee_torque": 360.0,
+   "ankle_torque": 180.0,
+   "abdomen_torque": 200.0,
+   "arm_torque": 80.0
+  },
+  "props": [],
+  "verified": false,
+  "survives_nudge": false,
+  "duration_s": 5.66,
+  "seconds_to_find": 166.5,
+  "live": {
+   "controllers": [
+    "motion-physical",
+    "walker"
+   ],
+   "falls_after": 1,
+   "final_up": 1.0,
+   "final_speed": 0.0,
+   "final_height_m": 1.124,
+   "travel_m": 0.0,
+   "min_up": -0.87,
+   "flight_s": 0.4,
+   "com_rise_m": 0.056,
+   "rotation_rad": 6.62,
+   "drop_m": 0.0,
+   "on_box": false,
+   "ok": false,
+   "why": [
+    "did not end standing still and upright"
+   ]
+  },
+  "title": "Front flip",
+  "description": "A forward somersault. No clean front flip exists in the source database, so this is the backflip take played backwards: time-reversed flight is still a valid ballistic flight.",
   "source": "CMU Graphics Lab Motion Capture Database (mocap.cs.cmu.edu), subject 88 trial 1"
  }
 }

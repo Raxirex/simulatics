@@ -31,7 +31,7 @@ DATA = Path(__file__).resolve().parent / "data"
 class Sample:
     id: str
     title: str
-    group: str                 # "Standing and walking" | "Acrobatics" | "Parkour"
+    group: str                 # "Standing and walking" | "Worlds" | "Acrobatics" | "Parkour" | "Reference takes"
     description: str
     kind: str                  # "physics" | "reference"
     setup: Callable            # setup(session) -> message
@@ -193,9 +193,60 @@ def stairs(session) -> str:
     return f"stairs, goal ({gx:.1f}, {gy:.1f})"
 
 
-# ------------------------------------------------------------------------- reference clips (motion capture)
+# ------------------------------------------------------------------------------------------------- worlds
+def _world(session, name: str, waypoints: bool = True) -> dict:
+    from ..models import HumanoidParams
+    with session.lock:
+        session.running = False
+        session.unload_policy()
+        session.controller_kind = "auto"
+        session.custom_path, session.cad_xml = None, None
+        session.params = HumanoidParams()
+        session.speed = 1.0
+    info = session.load_world(name)
+    if waypoints and info.get("waypoints"):
+        with session.lock:
+            for i, p in enumerate(info["waypoints"]):
+                session.nav.set_goal(list(p), append=i > 0)
+    return info
+
+
+@_sample("playground", "Playground", "Worlds",
+         "A yard of blocks, a ramp and platform, stepping blocks, slalom posts, a tunnel, balls to kick and crates "
+         "to push. The robot walks a loop through it.")
+def playground(session) -> str:
+    info = _world(session, "playground")
+    _go(session)
+    return info["about"]
+
+
+@_sample("parkour_course", "Parkour course", "Worlds",
+         "Walks the centre lane of the course: random low steps, stairs up and down, and a ramp. Hurdles, jump "
+         "boxes, a drop platform and a balance beam stand beside it.")
+def parkour_course(session) -> str:
+    info = _world(session, "parkour")
+    _go(session)
+    return info["about"]
+
+
+@_sample("kitchen", "Kitchen", "Worlds",
+         "A kitchen with a worktop (cup, apple and butter box within reach), hob, sink, cupboards, fridge, island "
+         "and dining table. The robot walks a short tour and comes back to the worktop.")
+def kitchen(session) -> str:
+    info = _world(session, "kitchen")
+    _go(session)
+    return info["about"]
+
+
+# ------------------------------------------------- motion capture: physical where verified, reference otherwise
 def manifest() -> dict:
     p = DATA / "manifest.json"
+    return json.loads(p.read_text(encoding="utf-8")) if p.exists() else {}
+
+
+def physical() -> dict:
+    """Clips that have been turned into physically simulated motions (samples/build_physical.py)."""
+    p = DATA / "physical.json"
     return json.loads(p.read_text(encoding="utf-8")) if p.exists() else {}
 
 
@@ -210,12 +261,32 @@ def _reference(session, clip: dict) -> str:
     return msg
 
 
-def _register_references() -> None:
-    for cid, clip in manifest().items():
-        def setup(session, clip=clip):
-            return _reference(session, clip)
-        SAMPLES[cid] = Sample(cid, clip["title"], clip["group"], clip["description"], "reference", setup,
-                              clip.get("source", ""))
+def _physical(session, entry: dict) -> str:
+    path = DATA / entry["file"]
+    if not path.exists():
+        raise FileNotFoundError(f"{path.name} is missing: run  python -m simulatics.samples.build_physical")
+    _builtin(session, entry.get("props") or [], entry.get("params") or None)
+    msg = session.play_tape(str(path))
+    if entry.get("params"):
+        msg += " with the athletic motor preset (" + ", ".join(f"{k.replace('_', ' ')} {v:g} Nm" for k, v in entry["params"].items()) + ")"
+    return msg
 
 
-_register_references()
+def _register_clips() -> None:
+    man, phys = manifest(), physical()
+    done = {k: v for k, v in phys.items() if v.get("verified") and (DATA / v["file"]).exists()}
+    for cid, e in done.items():
+        clip = man.get(e.get("clip", cid), {})
+        note = " Physically simulated: only motor commands are applied, found by sampling-based tracking of a "                "motion-capture take; open loop, so it reproduces only on this robot from its standing start."
+        if e.get("params"):
+            note += " Uses the athletic motor preset (stronger hips, knees, ankles and waist)."
+        SAMPLES[cid] = Sample(cid, e["title"], clip.get("group", "Parkour"), e["description"] + note, "physics",
+                              lambda session, e=e: _physical(session, e), e.get("source", ""))
+    for cid, clip in man.items():
+        rid = cid if cid not in done else f"{cid}_reference"
+        title = clip["title"] if cid not in done else f"{clip['title']} (the reference take)"
+        SAMPLES[rid] = Sample(rid, title, clip["group"] if cid not in done else "Reference takes", clip["description"],
+                              "reference", lambda session, clip=clip: _reference(session, clip), clip.get("source", ""))
+
+
+_register_clips()

@@ -467,6 +467,20 @@ class SimSession:
                 self.build()
         return float(goal[0]), float(goal[1])
 
+    def load_world(self, name: str, seed: int | None = 0) -> dict:
+        """Build a ready-made world (sim/worlds.py: playground, parkour, kitchen) around the built-in robot.
+        Returns its info: {"goal", "waypoints", "about"}."""
+        from ..sim.worlds import WORLDS
+        if name not in WORLDS:
+            raise ValueError(f"unknown world {name!r} (choose from {sorted(WORLDS)})")
+        if self.custom_path:
+            raise ValueError("ready-made worlds are built around the built-in humanoid; load it first")
+        obstacles, props, info = (WORLDS[name](seed, self.params) if name == "kitchen" else WORLDS[name](seed))
+        with self.lock:
+            self.obstacles, self.props, self.cad_xml = obstacles, props, None
+            self.build()
+        return info
+
     def manipulation_scene(self, seed: int | None = None) -> None:
         """A table in front of the robot with small graspable objects on it."""
         from ..sim.scene import manipulation_scene
