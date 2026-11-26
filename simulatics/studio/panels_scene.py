@@ -551,6 +551,17 @@ class MotorsPanel(QWidget):
         self.table.setAlternatingRowColors(True)
         self.table.verticalHeader().setVisible(False)
         self.table.setSelectionBehavior(QAbstractItemView.SelectRows)
+        row = QHBoxLayout()
+        imp, exp = QPushButton("Import values..."), QPushButton("Export values...")
+        imp.setToolTip("Read motor values from a .csv or .json table: a name column (motor name or a pattern such as "
+                       "*_knee) and any of kp, kv, torque, gear, damping, armature")
+        imp.clicked.connect(self._import)
+        exp.clicked.connect(lambda: self.studio.export_motors())
+        row.addWidget(imp)
+        row.addWidget(exp)
+        row.addStretch(1)
+        row.addWidget(dim("Edits are kept when the scene or the accessories change."))
+        lay.addLayout(row)
         lay.addWidget(self.table)
         self._quiet = False
         self.table.itemChanged.connect(self._changed)
@@ -576,6 +587,11 @@ class MotorsPanel(QWidget):
         t.resizeColumnsToContents()
         t.horizontalHeader().setSectionResizeMode(0, QHeaderView.Stretch)
         self._quiet = False
+
+    def _import(self) -> None:
+        path, _ = QFileDialog.getOpenFileName(self, "Import motor values", "", "Tables (*.csv *.json);;All files (*)")
+        if path and self.studio.import_path(path):
+            self.rebuild()
 
     def _changed(self, it: QTableWidgetItem) -> None:
         if self._quiet or it.column() == 0:

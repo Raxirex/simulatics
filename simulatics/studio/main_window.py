@@ -112,6 +112,10 @@ class StudioWindow(QMainWindow):
         self.viewport.objectPicked.connect(self._object_picked)
         self._kept_object = ""
         self._max_state = None
+        self.project_folder: str | None = None
+        self.project_name = ""
+        self.ask_on_close = True
+        self.setAcceptDrops(True)
         self.outliner.selected.connect(lambda kind, ident: self.select(kind, ident, from_outliner=True))
 
         self.apply_workspace("Layout")
@@ -163,6 +167,16 @@ class StudioWindow(QMainWindow):
         m.addAction(self._act("New Graph", self.graph_panel.new, "Ctrl+N"))
         m.addAction(self._act("Open Graph...", self.graph_panel.open, "Ctrl+O"))
         m.addAction(self._act("Save Graph...", self.graph_panel.save, "Ctrl+S"))
+        m.addSeparator()
+        m.addAction(self._act("New Project...", self.new_project, "Ctrl+Shift+N"))
+        m.addAction(self._act("Open Project...", self.open_project, "Ctrl+Shift+O"))
+        m.addAction(self._act("Save Project", self.save_project, "Ctrl+Shift+S"))
+        m.addAction(self._act("Save Project As...", lambda: self.save_project(ask=True)))
+        self.recent_menu = m.addMenu("Recent Projects")
+        self._fill_recent()
+        m.addSeparator()
+        m.addAction(self._act("Import...", self.import_dialog, "Ctrl+I"))
+        m.addAction(self._act("Export Motor Values...", self.export_motors))
         m.addSeparator()
         m.addAction(self._act("New Scene (empty world)", self.new_scene))
         m.addAction(self._act("Open Scene...", self.open_scene))
@@ -406,6 +420,159 @@ class StudioWindow(QMainWindow):
         if not from_outliner:
             self.outliner.show_body(body)
         self.inspector.show(kind, ident)
+
+    # ---- projects and imports -------------------------------------------------------------------------
+    def _title(self) -> None:
+        self.setWindowTitle((f"{self.project_name} - " if self.project_folder else "") + f"Simulatics Studio {__version__}")
+
+    def _fill_recent(self) -> None:
+        self.recent_menu.clear()
+        recent = [p for p in (self._settings().value("projects/recent") or []) if isinstance(p, str)]
+        for p in recent[:8]:
+            self.recent_menu.addAction(p, lambda p=p: self.open_project(p))
+        self.recent_menu.setEnabled(bool(recent))
+
+    def _remember_project(self, folder: str) -> None:
+        st = self._settings()
+        recent = [p for p in (st.value("projects/recent") or []) if isinstance(p, str) and p != folder]
+        st.setValue("projects/recent", [folder] + recent[:7])
+        self._fill_recent()
+
+    def _project_extra(self) -> dict:
+        """What the Studio adds to a project: the node graph, the camera, the layout."""
+        import base64
+        cam = self.viewport.cam
+        return {"graph": self.graph_panel.graph.to_dict(), "workspace": self.workspace,
+                "layout": base64.b64encode(bytes(self.saveState())).decode("ascii"),
+                "camera": {"name": self.viewport.camera_name, "lookat": [float(v) for v in cam.lookat], "distance": float(cam.distance),
+                           "azimuth": float(cam.azimuth), "elevation": float(cam.elevation)},
+                "tool": self.viewport.tool}
+
+    def new_project(self, folder: str | None = None, name: str | None = None) -> None:
+        """Start a project: pick a folder and a name; the current robot, scene and state become its first save."""
+        from .. import project
+        if not folder:
+            folder = QFileDialog.getExistingDirectory(self, "Choose (or create) a folder for the new project")
+        if not folder:
+            return
+        if name is None:
+            import os
+            name, ok = QInputDialog.getText(self, "New project", "Project name:", text=os.path.basename(folder.rstrip("/\\")))
+            if not ok:
+                return
+        try:
+            project.create(folder, name or "Untitled project", self.sess)
+        except FileExistsError:
+            self.log("That folder already holds a project: use Open Project, or pick another folder.")
+            return
+        self.project_folder, self.project_name = folder, name or "Untitled project"
+        self.save_project()
+
+    def save_project(self, ask: bool = False) -> None:
+        from .. import project
+        folder = self.project_folder
+        if ask or not folder:
+            folder = QFileDialog.getExistingDirectory(self, "Save the project in this folder")
+            if not folder:
+                return
+            if not self.project_name:
+                import os
+                self.project_name = os.path.basename(folder.rstrip("/\\")) or "Untitled project"
+        try:
+            f = project.save(self.sess, folder, name=self.project_name, extra=self._project_extra())
+            cloud = getattr(self.sess, "cloud", None)
+            if cloud is not None and len(cloud):
+                cloud.save(f.parent / "lidar_cloud.npz")
+        except Exception as e:  # noqa: BLE001
+            self.log(f"Could not save the project: {type(e).__name__}: {e}")
+            return
+        self.project_folder = folder
+        self._remember_project(folder)
+        self._title()
+        self.log(f"Project saved: {folder}")
+
+    def open_project(self, folder: str | None = None) -> None:
+        if not folder:
+            folder = QFileDialog.getExistingDirectory(self, "Open a project folder")
+        if folder:
+            self.import_path(folder)
+
+    def import_dialog(self) -> None:
+        path, _ = QFileDialog.getOpenFileName(
+            self, "Import a project, scene, graph, robot, motor values, motion, recording or policy", "",
+            "Everything Simulatics reads (*.json *.csv *.xml *.mjcf *.urdf *.bvh *.npz *.ply);;All files (*)")
+        if path:
+            self.import_path(path)
+
+    def import_path(self, path: str) -> bool:
+        """Bring in whatever `path` is (see simulatics/importer.py). Returns True when it worked."""
+        import base64
+        from pathlib import Path
+        from .. import graph as G
+        from .. import importer
+        try:
+            kind = importer.detect(path)
+            if kind == "graph":
+                self.graph_panel.set_graph(G.Graph.load(path), f"Opened {Path(path).name}")
+                self.show_dock("graph")
+                self.log(f"Node graph imported: {Path(path).name}")
+                return True
+            rep = importer.import_any(self.sess, path, kind)
+        except Exception as e:  # noqa: BLE001 - told to the user in plain words
+            self.log(f"Could not import {Path(path).name}: {e}")
+            return False
+        self.log(rep["message"])
+        self.timeline.rec.clear()
+        self.keep_object("")
+        if kind == "project":
+            data = rep["project"]
+            self.project_folder, self.project_name = data["folder"], data.get("name", "")
+            app = data.get("app") or {}
+            try:
+                if app.get("graph"):
+                    self.graph_panel.set_graph(G.Graph.from_dict(app["graph"]), "Graph from the project")
+                if app.get("layout"):
+                    self.restoreState(QByteArray(base64.b64decode(app["layout"])))
+                cam = app.get("camera") or {}
+                if cam:
+                    self.viewport.set_camera(cam.get("name", "Free"))
+                    self.viewport.cam.lookat[:] = cam.get("lookat", self.viewport.cam.lookat)
+                    self.viewport.cam.distance = cam.get("distance", self.viewport.cam.distance)
+                    self.viewport.cam.azimuth = cam.get("azimuth", self.viewport.cam.azimuth)
+                    self.viewport.cam.elevation = cam.get("elevation", self.viewport.cam.elevation)
+                    self._fill_cameras()
+                cloud = Path(data["folder"]) / "lidar_cloud.npz"
+                if cloud.exists() and hasattr(self.sess, "cloud"):
+                    from ..sim.cloud import PointCloudMap
+                    self.sess.cloud = PointCloudMap.load(cloud)
+            except Exception as e:  # noqa: BLE001 - the robot and scene are in; the extras are optional
+                self.log(f"Some project extras could not be restored: {e}")
+            self._remember_project(data["folder"])
+            self._title()
+        elif kind in ("robot", "recording", "motion"):
+            self.viewport.frame_robot()
+        if kind == "motors":
+            self.show_dock("motors")
+        if kind == "cloud" and "lidar3d" in self.docks:
+            self.show_dock("lidar3d")
+        return True
+
+    def export_motors(self) -> None:
+        from .. import importer
+        path, _ = QFileDialog.getSaveFileName(self, "Export motor values", "motors.csv", "Table (*.csv);;JSON (*.json)")
+        if path:
+            importer.export_motors(self.sess, path)
+            self.log(f"Motor values written to {path}")
+
+    def dragEnterEvent(self, e) -> None:
+        if e.mimeData().hasUrls() and any(u.isLocalFile() for u in e.mimeData().urls()):
+            e.acceptProposedAction()
+
+    def dropEvent(self, e) -> None:
+        for u in e.mimeData().urls():
+            if u.isLocalFile():
+                self.import_path(u.toLocalFile())
+        e.acceptProposedAction()
 
     # ---- scene objects --------------------------------------------------------------------------------
     def _show_object(self, group: str, info: dict) -> None:
@@ -754,6 +921,14 @@ class StudioWindow(QMainWindow):
                           "other software project. Third-party names belong to their owners.")
 
     def closeEvent(self, e) -> None:
+        if self.project_folder and self.ask_on_close and not getattr(sys, "frozen_selftest", False):
+            ans = QMessageBox.question(self, "Save the project?", f"Save '{self.project_name}' before closing?",
+                                       QMessageBox.Save | QMessageBox.Discard | QMessageBox.Cancel, QMessageBox.Save)
+            if ans == QMessageBox.Cancel:
+                e.ignore()
+                return
+            if ans == QMessageBox.Save:
+                self.save_project()
         st = self._settings()
         st.setValue("window/geometry", self.saveGeometry())
         st.setValue("window/state", self.saveState())

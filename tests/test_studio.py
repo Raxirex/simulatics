@@ -39,6 +39,7 @@ def app():
 def win(app):
     from simulatics.studio.main_window import StudioWindow
     w = StudioWindow(restore=False)
+    w.ask_on_close = False
     w.resize(1400, 900)
     w.show()
     if not spin(app, lambda: w.viewport.scn is not None and w.viewport._frames + w.viewport._fps > 0, 15):
@@ -621,3 +622,61 @@ def test_every_panel_can_shrink_and_the_viewport_can_fill_the_window(app, win):
     spin(app, timeout=0.3)
     assert win.docks["outliner"].isVisible() and win.docks["inspector"].isVisible()
     win.apply_workspace("Layout")
+
+
+def test_projects_save_and_reopen_everything_and_files_import_by_kind(app, win, tmp_path):
+    import json
+    from simulatics import graph as G
+    settle(app, win)
+    win.new_scene()
+    spin(app, timeout=0.3)
+    win.sess.add_object("box", 0.6, 1.6)
+    win.sess.add_object("ball", 1.6, 0.5)
+    knee = next(a["index"] for a in win.sess.actuators() if a["name"] == "left_knee")
+    win.sess.set_actuator(knee, "kp", 333.0)
+    win.graph_panel.load_example("Script")
+    win.viewport.set_camera("Free")
+    win.viewport.cam.azimuth = 77.0
+    folder = tmp_path / "lab"
+    win.new_project(str(folder), "Lab one")
+    assert (folder / "project.json").exists() and win.project_folder == str(folder) and "Lab one" in win.windowTitle()
+    data = json.loads((folder / "project.json").read_text(encoding="utf-8"))
+    assert data["name"] == "Lab one" and len(data["scene"]["obstacles"]) == 1 and len(data["app"]["graph"]["nodes"]) == 3
+    assert str(tmp_path) not in (folder / "project.json").read_text(encoding="utf-8")        # no local paths inside
+    # change everything, then open the project again
+    win.new_scene()
+    win.sess.set_actuator(knee, "kp", 300.0)
+    win.graph_panel.new()
+    win.viewport.cam.azimuth = 10.0
+    win.project_folder, win.project_name = None, ""
+    assert win.import_path(str(folder))
+    spin(app, timeout=0.4)
+    assert len(win.sess.obstacles) == 1 and len(win.sess.props) == 1 and win.sess.actuators()[knee]["kp"] == 333.0
+    assert len(win.graph_panel.graph.nodes) == 3 and abs(win.viewport.cam.azimuth - 77.0) < 1e-6
+    assert win.project_name == "Lab one" and "Lab one" in win.windowTitle()
+    # motor values from a table
+    table = tmp_path / "tune.csv"
+    table.write_text("name,kp,torque\n*_knee,350,210\n", encoding="utf-8")
+    assert win.import_path(str(table))
+    a = {x["name"]: x for x in win.sess.actuators()}
+    assert a["left_knee"]["kp"] == 350.0 and a["right_knee"]["torque"] == 210.0
+    win.motors.rebuild()
+    assert any(win.motors.table.item(r, 2).text() == "350" for r in range(win.motors.table.rowCount()))
+    # a graph file, a scene file, and something that is nothing
+    g = tmp_path / "g.json"
+    G.EXAMPLES["Walk to a goal"]().save(g)
+    assert win.import_path(str(g)) and len(win.graph_panel.graph.nodes) == 5
+    scene = tmp_path / "scene.json"
+    scene.write_text(json.dumps(win.sess.scene_dict()), encoding="utf-8")
+    win.new_scene()
+    assert win.import_path(str(scene)) and len(win.sess.obstacles) == 1
+    junk = tmp_path / "notes.txt"
+    junk.write_text("hello", encoding="utf-8")
+    assert not win.import_path(str(junk)) and "Could not import" in win.log_panel.toPlainText()
+    win.project_folder, win.project_name = None, ""
+    win._title()
+    win.graph_panel.new()
+    win.new_scene()
+    from simulatics import samples
+    samples._builtin(win.sess)
+    win.sess.running = False
