@@ -207,6 +207,69 @@ or MuJoCo Warp, thousands of robots per step) would plug in; none is installed, 
 second skill, "kick", is defined but has no trained result (balancing on one leg without feedback is hard
 for an open-loop program).
 
+### Projects and imports
+
+A project is a folder with `project.json` in it: the robot and its parameters, accessories, every object in
+the scene, motor edits, the controller, sensor settings, the node graph, the window layout and camera, the
+lidar point cloud, and the exact simulation state at the moment of saving. Opening it continues where you
+left off. File > New Project, Open Project, Save Project (Ctrl+Shift+S); recent projects are listed. Nothing
+about your computer or you is written into a project, and robot files inside the folder are stored by
+relative path, so the folder can be moved or shared.
+
+File > Import (Ctrl+I), or dropping a file onto the window, takes anything and works out what it is: a
+project folder, a scene, a node graph, a robot model (.xml, .urdf), motor values, motion capture (.bvh), a
+motion, a recorded motion or trained skill, a policy, a lidar point cloud (.ply).
+
+Motor values come from a table (.csv or .json) with a `name` column and any of `kp`, `kv`, `torque`, `gear`,
+`damping`, `armature`. A name can be a motor, a pattern or `*`:
+
+```
+name,kp,kv,torque
+*_knee,350,20,220
+left_hip_y,300,18,180
+```
+
+Motors panel > Import values / Export values does the same. Motor edits are kept when the scene or the
+accessories change.
+
+### Robot dog
+
+The robot dog trots to wherever you click (Samples > Robot dog, or load it in the Robot panel and click the
+floor): a trot gait with foot placement from the body's speed, analytic leg kinematics, and attitude and
+height feedback (`simulatics/control/quadruped.py`). Measured: about 0.7 m/s, stops within 2 cm of the goal,
+recovers from sideways shoves up to about 250 N. Flat floor only: it does not handle steps or terrain yet.
+
+### Lidar 3D view
+
+The "Lidar 3D" panel shows only what the lidar has seen: every point it hit since recording started, kept as a
+5 cm voxel map (up to 400,000 points), with the sensor's path, the latest scan highlighted and the robot's
+position. Drag to orbit, right-drag to pan, wheel to zoom; colour by height, distance or age. Save and load
+as .ply (opens in common point-cloud viewers) or .npz; a project stores it too.
+
+![Everything the lidar has seen in the playground, as a 3D point cloud](docs/images/lidar_cloud.png)
+
+### Simulator tools
+
+Standard simulator tools, written for a CPU and a
+Python code base (the research behind the choice is summarised in the commit history):
+
+- **System identification** (Motor Control panel): fit a joint's damping, rotor inertia and dry friction
+  (optionally the servo gains) so the simulation reproduces a recorded response, from the scope or from a CSV
+  log of a real motor (`time, target, angle`). The built-in self-test hides a change in the joint, records,
+  and finds it again: exact from a clean recording, within 5 to 20 % from a noisy one. `simulatics/sysid.py`.
+- **Validation** (Validation panel): run a task on copies of the robot with randomised physics (friction,
+  masses, motor strength, stiffness, damping, a payload, a shove) and under other solver settings (half the
+  time step, other integrators, friction cone, solver, softer contacts). Measured here: walking passes 13 of
+  15 variants (it fails under the Euler and RK4 integrators), standing passes all, and the open-loop recorded
+  motions pass only a few, which is the honest measure of how fragile they are. `simulatics/validate.py`.
+- **Recording**: Ctrl+R records the viewport and saves an animated GIF.
+- **Driving by keyboard**: with the viewport focused, the arrow keys walk the robot (up: ahead, left and
+  right: turn, down: stop). Works for the humanoid and the dog.
+
+Not taken on, and why: GPU-parallel simulation, soft bodies and fluids, differentiable physics, Gaussian
+splats and world-model evaluation need a GPU or large dependencies; a second physics engine for true
+cross-engine checks is a separate project.
+
 ### Worlds
 
 Assets panel > World, or `session.load_world("kitchen")`:
@@ -352,6 +415,10 @@ simulatics/
   samples/                 ready-made samples: physics set-ups and retargeted motion-capture clips
   skills/                  skill training: parallel motor-program search (uppercut demo)
   worldmodel/              world-model slot: interface, stand-in, runner (placeholder)
+  project.py               projects: save and restore everything as one folder
+  importer.py              import anything (projects, scenes, robots, motor values, motions, ...)
+  sysid.py                 system identification of joint and motor parameters
+  validate.py              robustness sweep: randomised physics and other solver settings
   studio/                  desktop workstation (PySide6): docking, viewport, tools, node editor
   bridge/                  ROS 2 bridge (rosbridge v2 client, rclpy backend, mock server)
   sim/                     locomotion tasks, vectorised environments, sensors, scenes and props
