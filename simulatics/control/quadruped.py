@@ -170,6 +170,18 @@ class QuadWalkController:
         self._dt = dt
         self.floor_z = 0.0
         self._reset_state()
+        # The feet are soft (they sink some millimetres under the weight): let the home stance settle once on
+        # a scratch copy, so that reset() starts at the true standing height and the height feedback aims at it.
+        d0.qpos[:] = model.qpos0
+        d0.qvel[:] = 0.0
+        self.reset(model, d0)
+        n = max(1, int(round(self.control_dt / model.opt.timestep)))
+        for _ in range(int(0.6 / self.control_dt)):
+            self.step(model, d0)
+            mujoco.mj_step(model, d0, n)
+        if np.isfinite(d0.qpos).all() and 0.5 * self.stand_z < d0.qpos[2] < 1.1 * self.stand_z:
+            self.stand_z = float(d0.qpos[2])
+        self._reset_state()
 
     # ------------------------------------------------------------------ kinematics
     def _fk(self, q: np.ndarray) -> np.ndarray:

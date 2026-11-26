@@ -359,6 +359,47 @@
   "description": "Starts lying face down, pushes up with the arms, brings the feet under the body and stands.",
   "source": "CMU Graphics Lab Motion Capture Database (mocap.cs.cmu.edu), subject 77 trial 17"
  },
+ "getup_back": {
+  "file": "getup_back.tape.npz",
+  "clip": "getup_back",
+  "params": {
+   "hip_torque": 300.0,
+   "knee_torque": 360.0,
+   "ankle_torque": 180.0,
+   "abdomen_torque": 200.0,
+   "arm_torque": 150.0
+  },
+  "props": [],
+  "verified": false,
+  "survives_nudge": false,
+  "duration_s": 10.0,
+  "seconds_to_find": 244.7,
+  "live": {
+   "controllers": [
+    "motion-physical",
+    "walker"
+   ],
+   "falls_after": 1,
+   "final_up": 1.0,
+   "final_speed": 0.0,
+   "final_height_m": 1.084,
+   "travel_m": 0.04,
+   "min_up": -0.59,
+   "flight_s": 0.14,
+   "com_rise_m": 0.699,
+   "rotation_rad": 1.58,
+   "drop_m": -0.88,
+   "rise_m": 0.88,
+   "on_box": false,
+   "ok": false,
+   "why": [
+    "did not end standing still and upright"
+   ]
+  },
+  "title": "Get up (lying on the back)",
+  "description": "Starts lying on the back, sits up, turns over a hand onto the feet and stands.",
+  "source": "CMU Graphics Lab Motion Capture Database (mocap.cs.cmu.edu), subject 77 trial 18"
+ },
  "cartwheel": {
   "file": "cartwheel.tape.npz",
   "clip": "cartwheel",
