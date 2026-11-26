@@ -38,5 +38,43 @@
   "population": 320,
   "variations": 3,
   "physics_steps": 49160000
+ },
+ "getup_front": {
+  "file": "getup_front.tape.npz",
+  "title": "Get up (from lying face down)",
+  "description": "From lying face down on the floor, at rest, to standing, by a forward roll onto the feet. Left and right move alike. Uses the athletic motor preset with stronger arms.",
+  "report": {
+   "reward": 22.373286448135733,
+   "reward_over_24_varied_starts": {
+    "min": 5.006442079860734,
+    "mean": 9.089778753661614
+   },
+   "stayed_standing_of_24": 0,
+   "final_up": 0.9971047865248069,
+   "feet_moved_m": 3.8916712364317103,
+   "end_speed": 0.2078979172028948,
+   "return_to_stance_cost": 0.14532728787345547,
+   "final_height_error_m": 0.004355612580803303,
+   "final_height_fraction": 0.9872100907965524,
+   "final_upright": 0.9971047865248069,
+   "start_height_m": 0.09967870053875905,
+   "time_to_stand_s": 4.4
+  },
+  "live": {
+   "ok": true,
+   "falls_after": 0,
+   "final_up": 1.0,
+   "final_speed": 0.0,
+   "controllers": [
+    "motion-physical",
+    "walker"
+   ],
+   "object_rise_m": 0.0,
+   "object_travel_m": 0.0
+  },
+  "generations": 150,
+  "population": 320,
+  "variations": 2,
+  "physics_steps": 103707000
  }
 }

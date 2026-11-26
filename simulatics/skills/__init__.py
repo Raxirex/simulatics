@@ -145,6 +145,7 @@ class SkillSpec:
     start: Callable | None = None          # start(model, standing qpos) -> qpos to begin from (lying down, say)
     mirror: bool = False                   # joints are named without a side ("hip_y"): left and right move alike
     to_stand: bool = False                 # the baseline command eases from the start pose to standing over the move
+    baseline: Callable | None = None       # baseline(env) -> (T, nu) servo targets the program adds to (a rough plan)
 
 
 @dataclass
@@ -294,7 +295,11 @@ class SkillEnv:
 
     def commands(self, theta: np.ndarray) -> np.ndarray:
         """(n, T, nu) servo targets."""
-        if self.spec.to_stand:                 # baseline: ease from the start pose to the standing command
+        if self.spec.baseline is not None:     # a rough plan of the move, which the search then corrects
+            if getattr(self, "_base", None) is None:
+                self._base = np.asarray(self.spec.baseline(self), float)
+            base = self._base
+        elif self.spec.to_stand:               # baseline: ease from the start pose to the standing command
             w = np.clip(np.arange(self.T) / max(self.n_move - 1, 1), 0.0, 1.0)
             w = (3 * w ** 2 - 2 * w ** 3)[:, None]
             base = (1 - w) * self.ctrl0 + w * self.ctrl_stand

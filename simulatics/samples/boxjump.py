@@ -121,13 +121,18 @@ def search(session, height: float, arms: bool | None = None, budget: dict | None
     xml0, _ = _setup(session, [], params)
     motion, box = reference(mujoco.MjModel.from_xml_string(xml0), height, arms)
     xml, q0 = _setup(session, [box], params)
-    cfg = TrackConfig(**{"samples": 1600, "keep": 100, "passes": 4, **(budget or {})})
-    tr = Tracker(xml, cfg)
-    try:
-        tape = tr.track(motion, q0, name=f"box jump {height:.2f} m", log=log)
-    finally:
-        tr.close()
-    live = verify(session, tape, [box], params, {"on_box": True})
+    # the search is a gamble on landing balanced: a second, differently seeded try rescues many heights
+    tries = [{"samples": 1800, "keep": 120, "passes": 5}, {"samples": 1800, "keep": 120, "passes": 5, "seed": 7, "sigma_legs": 0.25}]
+    for extra in tries[:1] if budget and budget.get("single") else tries:
+        cfg = TrackConfig(**{**extra, **{k: v for k, v in (budget or {}).items() if k != "single"}})
+        tr = Tracker(xml, cfg)
+        try:
+            tape = tr.track(motion, q0, name=f"box jump {height:.2f} m", log=log)
+        finally:
+            tr.close()
+        live = verify(session, tape, [box], params, {"on_box": True})
+        if live["ok"]:
+            break
     feet_high = round(float(tape.meta.get("com_rise_m", 0.0)), 2)
     entry = {"height_m": height, "arms": arms, "ok": bool(live["ok"]), "props": [box], "params": params,
              "file": f"box_jump_{_key(height)}.tape.npz", "com_rise_m": feet_high, "flight_s": tape.meta.get("flight_s"),

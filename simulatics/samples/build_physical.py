@@ -96,7 +96,7 @@ def verify(session, tape, props: list[dict], params: dict | None, need: dict, se
     rep = {"controllers": sorted(names), "falls_after": falls, "final_up": round(up[-1], 3), "final_speed": round(speed, 3),
            "final_height_m": round(z[-1], 3), "travel_m": round(travel, 2), "min_up": round(min(up), 2),
            "flight_s": m.get("flight_s"), "com_rise_m": m.get("com_rise_m"), "rotation_rad": m.get("rotation_rad"),
-           "drop_m": round(z[0] - z[-1], 2), "rise_m": round(z[-1] - z[0], 2), "on_box": bool(box_top > 0.2 and z[-1] - z[0] > 0.6 * box_top)}
+           "drop_m": round(z[0] - z[-1], 2), "rise_m": round(z[-1] - z[0], 2), "on_box": bool(box_top > 0.08 and z[-1] - z[0] > 0.6 * box_top)}
     ok = (t_end is not None and falls == 0 and up[-1] > 0.95 and speed < 0.1 and "walker" in names)
     why = [] if ok else ["did not end standing still and upright"]
     for k, v in need.items():

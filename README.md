@@ -158,6 +158,31 @@ Limits you should know:
 Rebuild or add your own: `python -m simulatics.samples.build_physical` (all) or with clip names; add
 `--seed 2` to retry the ones that failed with another random draw.
 
+### Jump onto a box of any height
+
+Samples menu, "Jump onto a box of any height...": type a height and the robot tries it in physics
+(`simulatics/samples/boxjump.py`). The motion-capture jump is reshaped for that height, the tracker searches
+for motor commands (one to four minutes), and the result is played and checked in the live session: the
+attempt counts only if the robot ends standing still on the box. Heights that worked are kept and replay at
+once.
+
+What was measured on the default robot with the athletic motor preset:
+
+| Box height | Result |
+| --- | --- |
+| 0.20, 0.30, 0.40, 0.50, 0.60 m | lands and stands; these recordings ship with Simulatics |
+| 0.68 m | made it in one build (the "Box jump up" sample), failed in two later searches: at its limit |
+| 0.80, 0.90, 1.00 m (arms) | fails: the centre of mass rises 0.3 to 0.4 m, far short of the box |
+
+From 0.80 m the robot is told to bring its arms forward onto the box and gets stronger arm motors. That does
+not get it up: the reference only points the arms at the box, nothing in it makes the hands carry weight, and
+the legs alone cannot lift the body that far. A real climb (hands on the edge, pull and swing a leg up) is a
+different motion that has not been built. The command says so when an attempt fails, with how far it got.
+
+```bash
+.venv\Scripts\python.exe -m simulatics.samples.boxjump 0.35 0.55      # try heights from the command line
+```
+
 ### Skill training (parallel)
 
 Teach the robot a new move by trying thousands of variations at once (`simulatics/skills`). A skill is a scene
@@ -185,6 +210,24 @@ ball goes 1.6 m up; the robot stays on its feet in 23 of 24 varied starts).
 
 It is not a textbook punch: the search found that leaning in nudges the ball off the tee and the rising fist
 then catches it. Nothing told it how to punch, only what counts as a good result.
+
+**Getting up from the floor.** "Get up (from lying face down) (trained)" starts with the robot lying on its
+front, at rest, and ends with it standing under the balance controller. How it does it was dictated by the
+body: the arms have no shoulder rotation and the elbows bend one way only, so the hands can only press on the
+floor beside the hips, which lifts the hips and not the chest. A push-up is impossible; pressing tips the
+robot over its head. The skill uses exactly that: press, roll forward over the head, tuck late, land on the
+feet in a deep squat, stand up. The search started from that rough plan (`SkillSpec.baseline`) and tuned it
+(150 generations of 320 candidates, 104 million physics steps); the live check passes (no fall, upright and
+still after the hand-over).
+
+![Getting up from face down, frame by frame](docs/images/getup.png)
+
+Its limits: it is one recording for one start (lying flat, face down, at rest). With the joints perturbed by
+0.02 rad at the start it usually does not end standing, so it is not a recovery reflex that works from
+wherever the robot fell, and it is not triggered automatically after a fall. Getting up from lying on the
+back is defined (`getup_back`) but has no working result: a rock-up and a prop-up on the arms both failed.
+Two earlier approaches also failed and are kept out of the samples: tracking the motion-capture get-ups, and
+searching without a starting plan (it converged on a crouch at 45 % of standing height).
 
 A new skill is a few lines:
 
@@ -250,8 +293,7 @@ as .ply (opens in common point-cloud viewers) or .npz; a project stores it too.
 
 ### Simulator tools
 
-Standard simulator tools, written for a CPU and a
-Python code base (the research behind the choice is summarised in the commit history):
+Standard simulator tools, written for a CPU and a Python code base:
 
 - **System identification** (Motor Control panel): fit a joint's damping, rotor inertia and dry friction
   (optionally the servo gains) so the simulation reproduces a recorded response, from the scope or from a CSV
@@ -450,7 +492,8 @@ docs/ROS2.md               using the bridge with ROS 2
   heavy mesh robots (Go2: 200k triangles) get shadows and reflections switched off automatically. The
   timeline scrub restores the physics state, not the controller's internal state, so resuming play after
   a scrub can stumble. Script nodes and the console run your Python with full access to the machine.
-- **Library robots** (Adam Lite, Go2) hold a pose but do not walk; Adam Lite falls without the support stand.
+- **Library robots.** Adam Lite holds a pose but does not walk and falls without the support stand. The Go2
+  trots to points on flat ground only.
 - **Accessory mass matters.** Standing push recovery has little margin: with 0.25 kg on top of the head the
   default robot falls from a 60 N sideways push that it survives at 0.1 kg (the default lidar mass).
 - **Arms** have no shoulder yaw, so each hand works on its own side and in front.

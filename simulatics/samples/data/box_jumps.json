@@ -1,0 +1,197 @@
+{
+ "0.20": {
+  "height_m": 0.2,
+  "arms": false,
+  "props": [
+   {
+    "name": "box 0.20 m",
+    "kind": "terrain",
+    "shape": "box",
+    "colour": "wood",
+    "rgba": [
+     0.72,
+     0.55,
+     0.36,
+     1.0
+    ],
+    "pos": [
+     0.8780402745882836,
+     0.019060833187570764
+    ],
+    "yaw": 0.0,
+    "size": [
+     0.55,
+     0.5522096493987179,
+     0.1
+    ],
+    "z": 0.1
+   }
+  ],
+  "params": {
+   "hip_torque": 300.0,
+   "knee_torque": 360.0,
+   "ankle_torque": 180.0,
+   "abdomen_torque": 200.0,
+   "arm_torque": 80.0
+  },
+  "file": "box_jump_0.20.tape.npz",
+  "com_rise_m": 0.37,
+  "flight_s": 0.52
+ },
+ "0.30": {
+  "height_m": 0.3,
+  "arms": false,
+  "props": [
+   {
+    "name": "box 0.30 m",
+    "kind": "terrain",
+    "shape": "box",
+    "colour": "wood",
+    "rgba": [
+     0.72,
+     0.55,
+     0.36,
+     1.0
+    ],
+    "pos": [
+     0.8780402745882836,
+     0.019060833187570764
+    ],
+    "yaw": 0.0,
+    "size": [
+     0.55,
+     0.5522096493987179,
+     0.15
+    ],
+    "z": 0.15
+   }
+  ],
+  "params": {
+   "hip_torque": 300.0,
+   "knee_torque": 360.0,
+   "ankle_torque": 180.0,
+   "abdomen_torque": 200.0,
+   "arm_torque": 80.0
+  },
+  "file": "box_jump_0.30.tape.npz",
+  "com_rise_m": 0.35,
+  "flight_s": 0.4
+ },
+ "0.40": {
+  "height_m": 0.4,
+  "arms": false,
+  "props": [
+   {
+    "name": "box 0.40 m",
+    "kind": "terrain",
+    "shape": "box",
+    "colour": "wood",
+    "rgba": [
+     0.72,
+     0.55,
+     0.36,
+     1.0
+    ],
+    "pos": [
+     0.8780402745882836,
+     0.019060833187570764
+    ],
+    "yaw": 0.0,
+    "size": [
+     0.55,
+     0.5522096493987179,
+     0.2
+    ],
+    "z": 0.2
+   }
+  ],
+  "params": {
+   "hip_torque": 300.0,
+   "knee_torque": 360.0,
+   "ankle_torque": 180.0,
+   "abdomen_torque": 200.0,
+   "arm_torque": 80.0
+  },
+  "file": "box_jump_0.40.tape.npz",
+  "com_rise_m": 0.49,
+  "flight_s": 0.4
+ },
+ "0.50": {
+  "height_m": 0.5,
+  "arms": false,
+  "props": [
+   {
+    "name": "box 0.50 m",
+    "kind": "terrain",
+    "shape": "box",
+    "colour": "wood",
+    "rgba": [
+     0.72,
+     0.55,
+     0.36,
+     1.0
+    ],
+    "pos": [
+     0.8780402745882836,
+     0.019060833187570764
+    ],
+    "yaw": 0.0,
+    "size": [
+     0.55,
+     0.5522096493987179,
+     0.25
+    ],
+    "z": 0.25
+   }
+  ],
+  "params": {
+   "hip_torque": 300.0,
+   "knee_torque": 360.0,
+   "ankle_torque": 180.0,
+   "abdomen_torque": 200.0,
+   "arm_torque": 80.0
+  },
+  "file": "box_jump_0.50.tape.npz",
+  "com_rise_m": 0.58,
+  "flight_s": 0.36
+ },
+ "0.60": {
+  "height_m": 0.6,
+  "arms": false,
+  "props": [
+   {
+    "name": "box 0.60 m",
+    "kind": "terrain",
+    "shape": "box",
+    "colour": "wood",
+    "rgba": [
+     0.72,
+     0.55,
+     0.36,
+     1.0
+    ],
+    "pos": [
+     0.8780402745882836,
+     0.019060833187570764
+    ],
+    "yaw": 0.0,
+    "size": [
+     0.55,
+     0.5522096493987179,
+     0.3
+    ],
+    "z": 0.3
+   }
+  ],
+  "params": {
+   "hip_torque": 300.0,
+   "knee_torque": 360.0,
+   "ankle_torque": 180.0,
+   "abdomen_torque": 200.0,
+   "arm_torque": 80.0
+  },
+  "file": "box_jump_0.60.tape.npz",
+  "com_rise_m": 0.65,
+  "flight_s": 0.38
+ }
+}
