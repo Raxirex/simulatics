@@ -355,7 +355,7 @@ class CloudView(QWidget):
             tr = np.concatenate([tr[:-1:len(tr) // 2000], tr[-1:]])
         px, vis = self.project(tr, (w, h))
         px = np.clip(px, -1e5, 1e5)
-        p.setPen(QPen(QColor(TRAJ_COLOR), 1.6))
+        p.setPen(QPen(QColor(TRAJ_COLOR), 1))                               # hairline: wide antialiased strokes are slow
         edges = np.flatnonzero(np.diff(np.concatenate([[False], vis, [False]]).astype(np.int8)))
         for a, b in zip(edges[::2].tolist(), edges[1::2].tolist()):        # runs of points in front of the camera
             if b - a >= 2:
@@ -385,7 +385,7 @@ class CloudView(QWidget):
         d = px[1] - px[0]
         n = float(np.linalg.norm(d))
         d = d / n if n > 1e-6 else np.array([0.0, -1.0])
-        length = max(n, 16.0)                                              # never smaller than a readable arrow
+        length = max(n, 28.0)                                              # never smaller than a readable arrow
         side = np.array([-d[1], d[0]])
         a, t = px[0], px[0] + d * length
         head = [t, t - d * 9 + side * 6, t - d * 9 - side * 6]

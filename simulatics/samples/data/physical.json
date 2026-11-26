@@ -373,7 +373,7 @@
   "verified": false,
   "survives_nudge": false,
   "duration_s": 10.0,
-  "seconds_to_find": 244.7,
+  "seconds_to_find": 307.0,
   "live": {
    "controllers": [
     "motion-physical",

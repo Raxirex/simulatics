@@ -66,17 +66,18 @@ class QuadWalkController:
     name = "quad-walker"
 
     # gait
-    period = 0.40            # s, one full trot cycle (each pair: half stance, half swing)
+    period = 0.30            # s, one full trot cycle (each pair: half stance, half swing)
     duty = 0.5               # stance fraction of the cycle
-    step_height = 0.07       # m, swing apex
+    step_height = 0.05       # m, swing apex
     kv_foothold = 0.12       # s, Raibert gain on the velocity error
     max_reach = 0.16         # m, a foothold stays this close to its nominal spot
+    kp_scale = 0.2           # of the stand hold's stiffness: a stiff leg bounces off the floor at touchdown
     # feedback on the stance legs
-    k_att = 0.8              # foot height per (lever arm * tilt): 1 = legs hold the trunk like a rigid table
+    k_att = 0.5              # foot height per (lever arm * tilt): 1 = legs hold the trunk like a rigid table
     k_att_rate = 0.03        # s, the same on the roll / pitch rate
     k_height = 0.6           # leg extension per metre of height error
     # speeds
-    v_max = 0.55             # m/s forward along a path
+    v_max = 0.70             # m/s forward along a path
     v_back = 0.3             # m/s backward / final approach
     v_side = 0.25            # m/s sideways
     w_max = 1.5              # rad/s
@@ -124,7 +125,7 @@ class QuadWalkController:
         hold = PDHoldController(model)
         order = {int(a): k for k, a in enumerate(hold.act)}
         pick = np.array([[order[int(a)] for a in row] for row in self.act], int)
-        self.kp, self.kd, self.gear = hold.kp[pick], hold.kd[pick], hold.gear[pick]
+        self.kp, self.kd, self.gear = hold.kp[pick] * self.kp_scale, hold.kd[pick], hold.gear[pick]
         self.q_home = hold.base_target[pick].copy()
         self.q_lo, self.q_hi = hold.target_lo[pick] + 0.02, hold.target_hi[pick] - 0.02
         lim = np.where(hold.ctrl_limited[pick], hold.hi[pick] * self.gear, np.inf)
@@ -169,6 +170,7 @@ class QuadWalkController:
         self._off = np.array([0.0, 0.5, 0.5, 0.0])                       # trot: FL+RR, then FR+RL
         self._dt = dt
         self.floor_z = 0.0
+        self._cache()
         self._reset_state()
         # The feet are soft (they sink some millimetres under the weight): let the home stance settle once on
         # a scratch copy, so that reset() starts at the true standing height and the height feedback aims at it.
@@ -240,18 +242,18 @@ class QuadWalkController:
         self.goal_err, self.yaw_err = 0.0, 0.0
         self.corrections = 0
         self._settle = 0.0
-        self.cmd = np.zeros(3)           # ramped command (vx, vy, wz) in the heading frame
+        self.cmd = [0.0, 0.0, 0.0]       # ramped command (vx, vy, wz) in the heading frame
         self._gait = False
         self.phase = 0.0
         self._still = 0.0                # s the command has been zero while trotting
-        self.p = self.nom.copy()         # commanded feet, level frame, relative to the base
-        self.p0 = self.nom.copy()        # where each swing started
-        self._swing = np.zeros(4, bool)
-        self.q_des = self.q_home.copy()
-        self._q_prev = self.q_home.copy()
+        self.p = self.nom.tolist()       # commanded feet, level frame, relative to the base
+        self.p0 = self.nom.tolist()      # where each swing started
+        self._swing = [False] * 4
+        self._q_prev = self.q_home.tolist()   # last joint targets
         self._blend = 1.0                # 0..1 from the last trot pose to the home pose
-        self._q_from = self.q_home.copy()
-        self._vf = np.zeros(2)           # filtered base velocity, heading frame
+        self._q_from = self.q_home.tolist()
+        self._vf = [0.0, 0.0]            # filtered base velocity, heading frame
+        self._tau = [0.0] * 12
         self.speed = 0.0
         self.up_z = 1.0
 
@@ -326,32 +328,57 @@ class QuadWalkController:
                 "heading_error_deg": (math.degrees(self.yaw_err)
                                       if has_goal and self._final_yaw is not None else None),
                 "speed": self.speed, "gait_phase": self.phase if self._gait else None,
-                "command": [float(self.cmd[0]), float(self.cmd[1]), float(self.cmd[2])]}
+                "command": list(self.cmd)}
 
     # ------------------------------------------------------------------ control
     def _clip(self, tau: np.ndarray) -> np.ndarray:
         return np.minimum(np.maximum(tau, -self.tau_max), self.tau_max)
 
+    def _cache(self) -> None:
+        """Plain-float copies of the per-leg constants: step() runs on Python floats (for four legs that is
+        several times faster than small numpy arrays)."""
+        self._kp, self._kd = self.kp.tolist(), self.kd.tolist()
+        self._tmax, self._gear = self.tau_max.tolist(), self.gear.ravel().tolist()
+        self._qlo, self._qhi = self.q_lo.tolist(), self.q_hi.tolist()
+        self._hip, self._d = self.hip_off.tolist(), self.side_d.tolist()
+        self._nom, self._wnom = self.nom.tolist(), self.walk_nom.tolist()
+        self._home = self.q_home.tolist()
+        self._offs = self._off.tolist()
+        self._act_flat = self.act.ravel()
+        self._unit_gear = bool(np.all(self.gear == 1.0))
+        f = np.zeros((4, 3))
+        f[:, 2] = -self.weight / 4
+        self._ff_home = self._weight_torque(self.q_home, f).tolist()
+
     def step(self, model: mujoco.MjModel, data: mujoco.MjData) -> None:
         dt = self._dt
         qpos, qvel = data.qpos, data.qvel
-        px, py, pz, w, x, y, z = (float(v) for v in qpos[:7])
+        px, py, pz, w, x, y, z = qpos[:7].tolist()
+        vxw, vyw, _, wx, wy, _ = qvel[:6].tolist()
+        qj, qv = qpos[self.qadr].tolist(), qvel[self.dadr].tolist()
         r00, r10 = 1 - 2 * (y * y + z * z), 2 * (x * y + w * z)
         r20, r21, r22 = 2 * (x * z - w * y), 2 * (y * z + w * x), 1 - 2 * (x * x + y * y)
         yaw = math.atan2(r10, r00)
         cy, sy = math.cos(yaw), math.sin(yaw)
         self.up_z = r22
-        vxw, vyw = float(qvel[0]), float(qvel[1])
         vx, vy = cy * vxw + sy * vyw, -sy * vxw + cy * vyw
         self.speed = math.hypot(vxw, vyw)
-        self._vf[0] += 0.1 * (vx - self._vf[0])
-        self._vf[1] += 0.1 * (vy - self._vf[1])
+        vf = self._vf
+        vf[0] += 0.1 * (vx - vf[0])
+        vf[1] += 0.1 * (vy - vf[1])
+        kp, kd, tmax = self._kp, self._kd, self._tmax
+        out = self._tau
 
-        if self.mode == "fallen" or r22 < 0.3 or not math.isfinite(pz):
+        if self.mode == "fallen" or r22 < 0.3 or pz != pz:
             if self.mode != "fallen":
                 self.mode, self.message = "fallen", "robot fell"
                 self._gait, self._stage, self._wps, self._vel = False, "idle", None, None
-            data.ctrl[self.act] = self._clip(-self.kd * qvel[self.dadr]) / self.gear     # limp, damped
+            for i in range(4):                             # limp, damped
+                for j in range(3):
+                    t = -kd[i][j] * qv[i][j]
+                    lim = tmax[i][j]
+                    out[3 * i + j] = lim if t > lim else (-lim if t < -lim else t)
+            self._write(data)
             return
 
         want = self._command(px, py, yaw)                 # None = stand, else (vx, vy, wz)
@@ -366,89 +393,155 @@ class QuadWalkController:
 
         if want is not None and not self._gait:           # start trotting from the stand
             self._gait, self.phase, self._still = True, 0.0, 0.0
-            self.p[:] = self.nom
-            self.p0[:] = self.nom
-            self._swing[:] = False
+            self.p = [list(r) for r in self._nom]
+            self.p0 = [list(r) for r in self._nom]
+            self._swing = [False] * 4
+        qprev = self._q_prev
+        inv_dt = 1.0 / dt
         if self._gait:
-            # rotation that takes level-frame vectors into the (tilted) base frame: R^T Rz(yaw)
-            rot = np.array([[1 - 2 * (y * y + z * z), 2 * (x * y - w * z), 2 * (x * z + w * y)],
-                            [r10, 1 - 2 * (x * x + z * z), 2 * (y * z - w * x)],
-                            [r20, r21, r22]])
-            m_lb = rot.T @ np.array([[cy, -sy, 0.0], [sy, cy, 0.0], [0.0, 0.0, 1.0]])
             roll, pitch = math.atan2(r21, r22), -math.asin(max(-1.0, min(1.0, r20)))
-            ended = self._trot(dt, want is None, roll, pitch, float(qvel[3]), float(qvel[4]),
-                               pz - self.floor_z)
-            q_des = self._ik(self.p @ m_lb.T - self.hip_off)
-            stance = ~self._swing
-            n_st = max(1, int(stance.sum()))
-            f = np.outer(stance * (-self.weight / n_st), m_lb[:, 2])
+            ended = self._trot(dt, want is None, roll, pitch, wx, wy, pz - self.floor_z)
+            # m: level-frame vectors -> the (tilted) base frame, R^T Rz(yaw)
+            r01, r02 = 2 * (x * y - w * z), 2 * (x * z + w * y)
+            r11, r12 = 1 - 2 * (x * x + z * z), 2 * (y * z - w * x)
+            m00, m01 = r00 * cy + r10 * sy, -r00 * sy + r10 * cy
+            m10, m11 = r01 * cy + r11 * sy, -r01 * sy + r11 * cy
+            m20, m21 = r02 * cy + r12 * sy, -r02 * sy + r12 * cy
+            swing = self._swing
+            n_st = 4 - sum(swing)
+            fs = -self.weight / max(1, n_st)
+            fx, fy, fz = fs * r20, fs * r21, fs * r22      # the weight share, in the base frame
+            l1, l2 = self.l1, self.l2
+            r2_min, r2_max = self._r2_min, self._r2_max
+            k3 = 1.0 / (2 * l1 * l2)
+            l12 = l1 * l1 + l2 * l2
+            atan2, sqrt, sin, cos, acos = math.atan2, math.sqrt, math.sin, math.cos, math.acos
+            for i in range(4):
+                pl, hip, d = self.p[i], self._hip[i], self._d[i]
+                a, b, cz = pl
+                bx = m00 * a + m01 * b + r20 * cz - hip[0]
+                by = m10 * a + m11 * b + r21 * cz - hip[1]
+                bz = m20 * a + m21 * b + r22 * cz - hip[2]
+                # inverse kinematics: abduction, then the two-link chain in the leg plane
+                zz2 = by * by + bz * bz - d * d
+                if zz2 < 1e-6:
+                    zz2 = 1e-6
+                zz = -sqrt(zz2)
+                q1 = atan2(bz, by) - atan2(zz, d)
+                if q1 > _PI:
+                    q1 -= 2 * _PI
+                elif q1 < -_PI:
+                    q1 += 2 * _PI
+                r2_raw = bx * bx + zz2
+                r2 = r2_min if r2_raw < r2_min else (r2_max if r2_raw > r2_max else r2_raw)
+                if r2 != r2_raw:
+                    k = sqrt(r2 / r2_raw)
+                    bx, zz = bx * k, zz * k
+                c3 = (r2 - l12) * k3
+                q3 = -acos(1.0 if c3 > 1.0 else (-1.0 if c3 < -1.0 else c3))
+                s3 = sin(q3)
+                q2 = atan2(-bx, -zz) - atan2(l2 * s3, l1 + l2 * c3)
+                lo, hi = self._qlo[i], self._qhi[i]
+                q1 = lo[0] if q1 < lo[0] else (hi[0] if q1 > hi[0] else q1)
+                q2 = lo[1] if q2 < lo[1] else (hi[1] if q2 > hi[1] else q2)
+                q3 = lo[2] if q3 < lo[2] else (hi[2] if q3 > hi[2] else q3)
+                if swing[i]:
+                    f1 = f2 = f3 = 0.0
+                else:                                      # weight feed-forward J^T f
+                    s1, c1 = sin(q1), cos(q1)
+                    s23, c23 = sin(q2 + q3), cos(q2 + q3)
+                    ex = -l1 * sin(q2) - l2 * s23
+                    ez = -l1 * cos(q2) - l2 * c23
+                    lat = -s1 * fy + c1 * fz
+                    f1 = -(d * s1 + ez * c1) * fy + (d * c1 - ez * s1) * fz
+                    f2 = ez * fx - ex * lat
+                    f3 = l2 * (-c23 * fx + s23 * lat)
+                qm, qd, qp, kpi, kdi, lim = qj[i], qv[i], qprev[i], kp[i], kd[i], tmax[i]
+                for j, (qt, ff) in enumerate(((q1, f1), (q2, f2), (q3, f3))):
+                    rate = (qt - qp[j]) * inv_dt
+                    rate = 15.0 if rate > 15.0 else (-15.0 if rate < -15.0 else rate)
+                    t = kpi[j] * (qt - qm[j]) + kdi[j] * (rate - qd[j]) + ff
+                    out[3 * i + j] = lim[j] if t > lim[j] else (-lim[j] if t < -lim[j] else t)
+                    qp[j] = qt
             if ended:
                 self._gait, self._blend = False, 0.0
-                self._q_from[:] = q_des
-                self._swing[:] = False
+                self._q_from = [list(r) for r in qprev]
+                self._swing = [False] * 4
         else:
-            if self._blend < 1.0:
+            home = self._home
+            blending = self._blend < 1.0
+            if blending:
                 self._blend = min(1.0, self._blend + dt / 0.25)
                 s = self._blend * self._blend * (3 - 2 * self._blend)
-                q_des = self._q_from + (self.q_home - self._q_from) * s
-            else:
-                q_des = self.q_home
-            f = np.zeros((4, 3))
-            f[:, 2] = -self.weight / 4
-
-        qd_des = (q_des - self._q_prev) * (1.0 / dt)
-        np.minimum(np.maximum(qd_des, -15.0, out=qd_des), 15.0, out=qd_des)
-        self._q_prev = q_des
-        self.q_des = q_des
-        tau = (self.kp * (q_des - qpos[self.qadr]) + self.kd * (qd_des - qvel[self.dadr])
-               + self._weight_torque(q_des, f))
-        data.ctrl[self.act] = self._clip(tau) / self.gear
-
+            ffh = self._ff_home
+            for i in range(4):
+                qm, qd, qp, kpi, kdi, lim, ff = qj[i], qv[i], qprev[i], kp[i], kd[i], tmax[i], ffh[i]
+                for j in range(3):
+                    qt = home[i][j]
+                    if blending:
+                        q0 = self._q_from[i][j]
+                        qt = q0 + (qt - q0) * s
+                    rate = (qt - qp[j]) * inv_dt
+                    rate = 15.0 if rate > 15.0 else (-15.0 if rate < -15.0 else rate)
+                    t = kpi[j] * (qt - qm[j]) + kdi[j] * (rate - qd[j]) + ff[j]
+                    out[3 * i + j] = lim[j] if t > lim[j] else (-lim[j] if t < -lim[j] else t)
+                    qp[j] = qt
+        self._write(data)
         if not self._gait and self._blend >= 1.0:
             self._standing(px, py, yaw, dt)
+
+    def _write(self, data: mujoco.MjData) -> None:
+        if self._unit_gear:
+            data.ctrl[self._act_flat] = self._tau
+        else:
+            data.ctrl[self._act_flat] = np.asarray(self._tau) / self._gear
+
+    @property
+    def q_des(self) -> np.ndarray:
+        """The current joint targets (4, 3): FL, FR, RL, RR x hip, thigh, calf."""
+        return np.array(self._q_prev)
 
     def _trot(self, dt: float, stopping: bool, roll: float, pitch: float, wx: float, wy: float,
               z_base: float) -> bool:
         """Advance the gait by dt and update the commanded feet self.p (level frame). Returns True when a
         requested stop is complete (all feet down near their home spots)."""
-        vx, vy, wz = float(self.cmd[0]), float(self.cmd[1]), float(self.cmd[2])
+        vx, vy, wz = self.cmd
         moving = abs(vx) + abs(vy) + 0.2 * abs(wz) > 0.02
         self._still = 0.0 if (moving or not stopping) else self._still + dt
         prev = self.phase
-        self.phase = (self.phase + dt / self.period) % 1.0
-        if stopping and self._still > self.period and (self.phase < prev or (prev < 0.5 <= self.phase)):
+        phase = (prev + dt / self.period) % 1.0
+        self.phase = phase
+        if stopping and self._still > self.period and (phase < prev or (prev < 0.5 <= phase)):
             return True                                   # a pair has just landed: all four feet are down
-        psi = (self.phase + self._off) % 1.0
-        swing = psi >= self.duty
-        lift = swing & ~self._swing
-        if lift.any():
-            self.p0[lift] = self.p[lift]
-        self._swing = swing
-        p = self.p
-        nom = self.walk_nom
-        # stance: the ground moves backward under the body
-        sx = p[:, 0] - (vx - wz * p[:, 1]) * dt
-        sy = p[:, 1] - (vy + wz * p[:, 0]) * dt
+        duty = self.duty
         h = self.height + min(max(self.k_height * (self.stand_z - z_base), -0.03), 0.03)
-        sz_t = -h + (self.k_att * roll + self.k_att_rate * wx) * nom[:, 1] \
-                  - (self.k_att * pitch + self.k_att_rate * wy) * nom[:, 0]
-        sz = p[:, 2] + 0.25 * (sz_t - p[:, 2])
-        # swing: arc to the Raibert foothold
-        u = np.minimum(np.maximum((psi - self.duty) / (1.0 - self.duty), 0.0), 1.0)
-        s = u * u * (3.0 - 2.0 * u)
-        half = 0.5 * self.duty * self.period
-        fvx, fvy = float(self._vf[0]), float(self._vf[1])
+        a_roll = self.k_att * roll + self.k_att_rate * wx
+        a_pitch = self.k_att * pitch + self.k_att_rate * wy
+        half = 0.5 * duty * self.period
+        fvx, fvy = self._vf
         ox = _sat(half * fvx + self.kv_foothold * (fvx - vx), self.max_reach)
         oy = _sat(half * fvy + self.kv_foothold * (fvy - vy), self.max_reach)
-        tx = nom[:, 0] + ox - half * wz * nom[:, 1]
-        ty = nom[:, 1] + oy + half * wz * nom[:, 0]
-        b = u * (1.0 - u)
-        wxp = self.p0[:, 0] + (tx - self.p0[:, 0]) * s
-        wyp = self.p0[:, 1] + (ty - self.p0[:, 1]) * s
-        wzp = self.p0[:, 2] + (-self.height - self.p0[:, 2]) * s + self.step_height * 16.0 * b * b
-        p[:, 0] = np.where(swing, wxp, sx)
-        p[:, 1] = np.where(swing, wyp, sy)
-        p[:, 2] = np.where(swing, wzp, sz)
+        lift = self.step_height * 16.0
+        for i in range(4):
+            psi = (phase + self._offs[i]) % 1.0
+            p, nom = self.p[i], self._wnom[i]
+            if psi >= duty:                               # swing: arc to the Raibert foothold
+                p0 = self.p0[i]
+                if not self._swing[i]:
+                    self._swing[i] = True
+                    p0[0], p0[1], p0[2] = p
+                u = (psi - duty) / (1.0 - duty)
+                s = u * u * (3.0 - 2.0 * u)
+                b = u * (1.0 - u)
+                p[0] = p0[0] + (nom[0] + ox - half * wz * nom[1] - p0[0]) * s
+                p[1] = p0[1] + (nom[1] + oy + half * wz * nom[0] - p0[1]) * s
+                p[2] = p0[2] + (-self.height - p0[2]) * s + lift * b * b
+            else:                                         # stance: the ground moves backward under the body
+                self._swing[i] = False
+                a, c = p[0], p[1]
+                p[0] = a - (vx - wz * c) * dt
+                p[1] = c - (vy + wz * a) * dt
+                p[2] += 0.25 * (-h + a_roll * nom[1] - a_pitch * nom[0] - p[2])
         return False
 
     # ------------------------------------------------------------------ path following

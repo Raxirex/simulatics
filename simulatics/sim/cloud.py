@@ -13,6 +13,7 @@ import numpy as np
 _BITS = 21                       # bits per axis in the packed voxel key
 _OFF = 1 << (_BITS - 1)          # voxel indices are shifted by this to become non-negative
 _CHUNK = 16384                   # smallest buffer the cloud starts with; it then doubles
+_RECENT = 32768                  # new voxel keys wait in a small sorted array and are merged in this many at a time
 
 
 def _empty3() -> np.ndarray:
@@ -50,7 +51,10 @@ class PointCloudMap:
         self._pts = np.zeros((cap, 3), np.float32)
         self._stamps = np.zeros(cap, np.float32)
         self._n = 0
-        self._keys = np.zeros(0, np.int64)          # sorted packed keys of the occupied voxels
+        # packed keys of the occupied voxels, in two sorted arrays: inserting into the big one costs a pass
+        # over all of it, so new keys go into the small one, which is folded into the big one now and then
+        self._keys = np.zeros(0, np.int64)
+        self._recent = np.zeros(0, np.int64)
         self._traj = np.zeros((256, 3), np.float32)
         self._m = 0
         self._lo = None
@@ -83,25 +87,23 @@ class PointCloudMap:
                 if not ok.all():
                     pts = pts[ok]
                 ukeys, first = np.unique(keys, return_index=True)         # one candidate per voxel: its first hit
-                pos = np.searchsorted(self._keys, ukeys)
-                if len(self._keys):
-                    known = self._keys[np.minimum(pos, len(self._keys) - 1)] == ukeys
-                    fresh = ~known
-                else:
-                    fresh = np.ones(len(ukeys), bool)
+                fresh = ~(self._has(self._keys, ukeys) | self._has(self._recent, ukeys))
                 added = int(np.count_nonzero(fresh))
                 if added:
-                    ukeys, first, pos = ukeys[fresh], first[fresh], pos[fresh]
+                    ukeys, first = ukeys[fresh], first[fresh]
                     if added > room:                                        # keep the earliest hits of the scan
                         keep = np.sort(np.argpartition(first, room - 1)[:room])
-                        ukeys, first, pos = ukeys[keep], first[keep], pos[keep]
+                        ukeys, first = ukeys[keep], first[keep]
                         added = room
                     new = pts[np.sort(first)]                               # stored in scan order
                     self._grow(self._n + added)
                     self._pts[self._n:self._n + added] = new
                     self._stamps[self._n:self._n + added] = time
                     self._n += added
-                    self._keys = np.insert(self._keys, pos, ukeys)          # stays sorted
+                    self._recent = np.insert(self._recent, np.searchsorted(self._recent, ukeys), ukeys)
+                    if len(self._recent) >= _RECENT:                        # two sorted runs: a cheap stable sort
+                        self._keys = np.sort(np.concatenate([self._keys, self._recent]), kind="stable")
+                        self._recent = np.zeros(0, np.int64)
                     lo, hi = new.min(axis=0), new.max(axis=0)
                     self._lo = lo if self._lo is None else np.minimum(self._lo, lo)
                     self._hi = hi if self._hi is None else np.maximum(self._hi, hi)
@@ -109,6 +111,13 @@ class PointCloudMap:
             if changed:
                 self.seq += 1
         return added
+
+    @staticmethod
+    def _has(sorted_keys: np.ndarray, keys: np.ndarray) -> np.ndarray:
+        if not len(sorted_keys):
+            return np.zeros(len(keys), bool)
+        pos = np.searchsorted(sorted_keys, keys)
+        return sorted_keys[np.minimum(pos, len(sorted_keys) - 1)] == keys
 
     def _add_origin(self, origin) -> bool:
         if origin is None:
@@ -167,6 +176,7 @@ class PointCloudMap:
         self._traj, self._m = (tr if len(tr) else np.zeros((256, 3), np.float32)), len(tr)
         keys, ok = self._pack(pts)
         self._keys = np.unique(keys)
+        self._recent = np.zeros(0, np.int64)
         good = pts[np.isfinite(pts).all(axis=1)]
         self._lo = good.min(axis=0) if len(good) else None
         self._hi = good.max(axis=0) if len(good) else None

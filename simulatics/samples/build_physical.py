@@ -196,6 +196,10 @@ def build(cid: str, session, log=print) -> dict:
              "description": spec.get("description", base["description"]), "source": base["source"]}
     if rep["ok"]:
         tape.save(DATA / entry["file"])
+    else:                                                     # kept outside the package, for looking into why
+        from ..jobs import RUNS
+        tape.meta["props"], tape.meta["params"] = props, params or {}
+        tape.save(RUNS / "_failed_tapes" / f"{cid}.tape.npz")
     log(f"{cid:15s} {'VERIFIED' if rep['ok'] else 'failed  '} nudge {'ok' if rep2['ok'] else 'no'}  flight {rep['flight_s']} s  "
         f"rise {rep['com_rise_m']} m  rotation {rep['rotation_rad']} rad  up {rep['final_up']}  falls {rep['falls_after']}  "
         f"{tape.meta['seconds']} s  {'; '.join(rep['why'])}")

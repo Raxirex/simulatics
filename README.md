@@ -297,7 +297,7 @@ offline scripted pilot runs simple missions ("walk to the red box", "pick up the
 | **Design** | CAD parts with real masses; simulate with CAD geometry; download STL/OBJ/GLB/STEP or URDF. Topology-optimise a link under loads taken from simulated walking, view the result, and put it on the robot. CMA-ES or Bayesian optimisation of body proportions and motor gains, each candidate scored by simulated walking. |
 | **Train** | PPO velocity tracking (Rudin et al. 2021 recipe), distil the model-based walker into a network, motion imitation (DeepMimic-style tracking), evolution strategy, genetic algorithm. Live chart, trained policies to load and use. Motion clips: preview, play with balance control, import your own BVH (retargeted to the robot). |
 
-## Measured on this laptop (i7-11800H, no GPU used)
+## Measured on an 8-core laptop CPU (no GPU used)
 
 | What | Result |
 |---|---|

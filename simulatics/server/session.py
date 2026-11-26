@@ -522,6 +522,9 @@ class SimSession:
                     v = b + a * np.sin(2 * np.pi * (0.2 * x + 0.5 * k * min(x, 10.0) ** 2 + max(x - 10.0, 0) * (f - 0.2)))
                 return i, float(np.clip(v, lo, hi) if lim else v)
             c.signal = None if kind == "hold" else sig
+            self.motor_trace_start = {"actuator": i, "qpos": self.data.qpos.copy(), "qvel": self.data.qvel.copy(),
+                                      "ctrl": self.manual_ctrl.copy(), "time": t0}   # for system identification
+            self._trace_act = i
             if kind == "hold":
                 self.manual_ctrl[i] = np.clip(b, lo, hi) if lim else b
             self.motor_trace.clear()
@@ -861,6 +864,8 @@ class SimSession:
                 m.dof_damping[dof] = max(0.0, v)
             elif field == "armature" and dof >= 0:
                 m.dof_armature[dof] = max(0.0, v)
+            elif field == "frictionloss" and dof >= 0:
+                m.dof_frictionloss[dof] = max(0.0, v)
             elif field == "ctrl":
                 lo, hi = m.actuator_ctrlrange[i]
                 self.manual_ctrl[i] = np.clip(v, lo, hi) if m.actuator_ctrllimited[i] else v

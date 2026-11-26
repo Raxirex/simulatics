@@ -215,8 +215,6 @@ def build_reference_from_ground(model: mujoco.MjModel, motion: Motion, q_stand: 
     m = motion.resample(1.0 / dt) if abs(motion.fps - 1.0 / dt) > 1e-6 else motion
     clip = m.qpos(model)
     clip[:, qa:qa + 2] += q_stand[qa:qa + 2] - clip[0, qa:qa + 2]          # lie down where the robot stands
-    for i in range(len(clip)):                                              # non-robot coordinates (objects) as in the scene
-        pass
     full = np.tile(q_stand, (len(clip), 1))
     nrobot = len(clip[0])
     full[:, :nrobot] = clip
