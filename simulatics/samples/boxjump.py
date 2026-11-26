@@ -133,6 +133,11 @@ def search(session, height: float, arms: bool | None = None, budget: dict | None
         live = verify(session, tape, [box], params, {"on_box": True})
         if live["ok"]:
             break
+    if not live["ok"]:                 # leave a usable scene: the robot standing in front of the box, at normal speed
+        from . import _builtin
+        _builtin(session, [box], params)
+        session.running = True
+    session.speed = 1.0
     feet_high = round(float(tape.meta.get("com_rise_m", 0.0)), 2)
     entry = {"height_m": height, "arms": arms, "ok": bool(live["ok"]), "props": [box], "params": params,
              "file": f"box_jump_{_key(height)}.tape.npz", "com_rise_m": feet_high, "flight_s": tape.meta.get("flight_s"),
