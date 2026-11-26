@@ -271,6 +271,13 @@ class SimSession:
                     return WalkController(m)
             except ImportError:
                 pass
+        if kind != "manual" and not self.support_stand:
+            try:                                  # four-legged robots (Unitree Go2): trot to where the path leads
+                from ..control.quadruped import QuadWalkController
+                if QuadWalkController.supports(m):
+                    return QuadWalkController(m)
+            except ImportError:
+                pass
         if kind != "manual":
             try:
                 from ..control.pd_hold import PDHoldController

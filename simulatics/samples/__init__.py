@@ -243,6 +243,49 @@ def kitchen(session) -> str:
     return info["about"]
 
 
+# ---------------------------------------------------------------------------------------------- robot dog
+DOG_WAYPOINTS = [(2.0, 0.0), (2.0, 1.5), (0.0, 1.5), (0.0, 0.0)]
+
+
+def _dog(session) -> None:
+    from .. import robots
+    if not robots.available("go2"):
+        raise FileNotFoundError("the robot dog is not downloaded yet: Robot panel > Unitree Go2 > Load (31 MB), or "
+                                "python -m simulatics.robots fetch go2")
+    with session.lock:
+        session.running = False
+        session.motor_overrides = {}
+        session.controller_kind = "auto"
+    if session.robot_name != "go2" or not session.custom_path or session.support_stand:
+        session.load_robot("go2")
+        if session.support_stand:
+            session.set_support_stand(False)
+    else:
+        session.reset()
+    session.speed = 1.0
+
+
+@_sample("dog_walk", "Dog: walk to a point", "Robot dog",
+         "The Unitree Go2 trots to a point three metres away, stops there and stands.")
+def dog_walk(session) -> str:
+    _dog(session)
+    with session.lock:
+        session.nav.set_goal([3.0, 1.0])
+    _go(session)
+    return "trotting to (3, 1)"
+
+
+@_sample("dog_square", "Dog: walk from point to point", "Robot dog",
+         "The Unitree Go2 trots a square of four waypoints and stops on the last one.")
+def dog_square(session) -> str:
+    _dog(session)
+    with session.lock:
+        for i, p in enumerate(DOG_WAYPOINTS):
+            session.nav.set_goal(list(p), append=i > 0)
+    _go(session)
+    return "four waypoints: " + " -> ".join(f"({x:g}, {y:g})" for x, y in DOG_WAYPOINTS)
+
+
 # ------------------------------------------------- motion capture: physical where verified, reference otherwise
 def manifest() -> dict:
     p = DATA / "manifest.json"

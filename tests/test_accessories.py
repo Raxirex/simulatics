@@ -105,7 +105,7 @@ def test_library_robot_holds_its_pose_and_takes_a_lidar(sess, name, stand):
     if not robots.available(name):
         pytest.skip(f"{name} not downloaded (python -m simulatics.robots fetch {name})")
     sess.load_robot(name)
-    assert sess.controller.name == "pd-hold" and sess.support_stand == stand and not sess.lidar.mounted
+    assert sess.controller.name == ("pd-hold" if stand else "quad-walker") and sess.support_stand == stand and not sess.lidar.mounted
     with sess.lock:
         z0 = float(sess.data.qpos[2]); sess.running = True; t0 = sess.data.time
     assert wait_for(lambda: sess.data.time > t0 + 3.0, 60)
