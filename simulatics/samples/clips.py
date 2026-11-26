@@ -40,5 +40,10 @@ clip("box_jump_up", "Jump onto a box", P, "A two-foot standing jump onto a platf
 clip("box_jump_down", "Jump down from a box", P, "Steps off a ledge and lands in a deep squat.",
      82, 4, frames=(150, 420), props="boxes", ground_min=True)
 clip("hurdle", "Jump a hurdle", P, "A running jump clearing an obstacle.", 127, 25, props="hurdle")
+R = "Recovery"
+clip("getup_front", "Get up (lying face down)", R,
+     "Starts lying face down, pushes up with the arms, brings the feet under the body and stands.", 77, 17, ground_all=True)
+clip("getup_back", "Get up (lying on the back)", R,
+     "Starts lying on the back, sits up, turns over a hand onto the feet and stands.", 77, 18, ground_all=True)
 clip("vertical_jump", "Vertical jump", P, "A high jump on the spot.", 16, 3)
 clip("broad_jump", "Broad jump", P, "A standing jump forwards.", 13, 11)

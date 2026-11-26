@@ -82,6 +82,7 @@ def _builtin(session, obstacles: list[dict] | None = None, params: dict | None =
         session.unload_policy()
         session.controller_kind = "auto"
         session.support_stand = False
+        session.motor_overrides = {}            # samples run on the robot as defined, not on hand-edited motors
         session.obstacles, session.props, session.cad_xml = list(obstacles or []), list(props or []), None
         session.set_params({**HumanoidParams().to_dict(), **(params or {})})      # rebuilds
         session.speed = 1.0
@@ -204,6 +205,7 @@ def _world(session, name: str, waypoints: bool = True) -> dict:
         session.controller_kind = "auto"
         session.custom_path, session.cad_xml = None, None
         session.support_stand = False
+        session.motor_overrides = {}
         session.params = HumanoidParams()
         session.speed = 1.0
     info = session.load_world(name)

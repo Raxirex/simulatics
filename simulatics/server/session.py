@@ -100,6 +100,7 @@ class SimSession:
         self._slam_t = -1.0
         self.nav_on_slam = False         # plan with the SLAM map and the SLAM pose
         from collections import deque
+        self.motor_overrides: dict[str, dict[str, float]] = {}   # motor name -> {field: value}: edits that survive rebuilds
         self.motor_trace: deque = deque(maxlen=6000)   # (time, target, angle, speed, torque) of the traced motor
         self._trace_act: int | None = None
         self.build()
@@ -123,6 +124,7 @@ class SimSession:
             self.motor_trace.clear()
             self.task = LocoTask(model, self.task_cfg) if has_free_root(model) and model.nu > 0 else None
             self.manual_ctrl = self.task.ctrl0.copy() if self.task else np.zeros(model.nu)
+            self._apply_motor_overrides()
             self.lidar = Lidar(model, self.lidar_cfg)
             self.arms = self._make_arms()
             self.controller = self._make_controller()
@@ -819,12 +821,29 @@ class SimSession:
                                    servo=True)
         return out
 
-    def set_actuator(self, index: int, field: str, value: float) -> None:
-        """Edit a motor in the compiled model in place; takes effect on the next physics step."""
+    def _apply_motor_overrides(self) -> None:
+        """Re-apply motor edits (Inspector, Motors table, imported values) to a freshly built model."""
+        m = self.model
+        index = {m.actuator(a).name: a for a in range(m.nu)}
+        for name, fields in list(self.motor_overrides.items()):
+            a = index.get(name)
+            if a is None:
+                continue
+            for field, value in fields.items():
+                try:
+                    self.set_actuator(a, field, value, remember=False)
+                except Exception:  # noqa: BLE001 - a value that no longer applies to this model
+                    pass
+
+    def set_actuator(self, index: int, field: str, value: float, remember: bool = True) -> None:
+        """Edit a motor in the compiled model in place; takes effect on the next physics step. The edit is
+        remembered and applied again whenever the model is rebuilt (scene changes, accessories)."""
         with self.lock:
             m, i, v = self.model, int(index), float(value)
             if not 0 <= i < m.nu:
                 raise IndexError("actuator index out of range")
+            if remember and field != "ctrl" and np.isfinite(v):
+                self.motor_overrides.setdefault(m.actuator(i).name or f"actuator_{i}", {})[field] = v
             jid = int(m.actuator_trnid[i, 0])
             dof = int(m.jnt_dofadr[jid]) if m.actuator_trntype[i] == mujoco.mjtTrn.mjTRN_JOINT else -1
             if field == "kp":

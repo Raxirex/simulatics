@@ -40,6 +40,12 @@ PHYSICAL: dict[str, dict] = {
     "backflip": {"params": ATHLETIC, "need": {"flight_s": 0.4, "rotation_rad": 5.5, "min_up": -0.8}},
     "front_flip": {"params": ATHLETIC, "cfg": {"samples": 2000, "keep": 120, "passes": 4, "hold": 2.5, "lead_out": 0.9},
                    "need": {"flight_s": 0.3, "rotation_rad": 5.5, "min_up": -0.8}},
+    "getup_front": {"params": {**ATHLETIC, "arm_torque": 150.0}, "from_ground": True,
+                    "cfg": {"samples": 2000, "keep": 120, "passes": 4, "lead_out": 0.9, "hold": 2.0},
+                    "need": {"rise_m": 0.7}},
+    "getup_back": {"params": {**ATHLETIC, "arm_torque": 150.0}, "from_ground": True,
+                   "cfg": {"samples": 2000, "keep": 120, "passes": 4, "lead_out": 0.9, "hold": 2.0},
+                   "need": {"rise_m": 0.7}},
     "cartwheel": {"params": {**ATHLETIC, "arm_torque": 150.0}, "cfg": {"samples": 2000, "keep": 120, "passes": 3, "hold": 2.5, "lead_out": 0.9},
                   "need": {"rotation_rad": 4.8, "min_up": -0.7}},
 }
@@ -88,7 +94,7 @@ def verify(session, tape, props: list[dict], params: dict | None, need: dict, se
     rep = {"controllers": sorted(names), "falls_after": falls, "final_up": round(up[-1], 3), "final_speed": round(speed, 3),
            "final_height_m": round(z[-1], 3), "travel_m": round(travel, 2), "min_up": round(min(up), 2),
            "flight_s": m.get("flight_s"), "com_rise_m": m.get("com_rise_m"), "rotation_rad": m.get("rotation_rad"),
-           "drop_m": round(z[0] - z[-1], 2), "on_box": bool(box_top > 0.2 and z[-1] - z[0] > 0.6 * box_top)}
+           "drop_m": round(z[0] - z[-1], 2), "rise_m": round(z[-1] - z[0], 2), "on_box": bool(box_top > 0.2 and z[-1] - z[0] > 0.6 * box_top)}
     ok = (t_end is not None and falls == 0 and up[-1] > 0.95 and speed < 0.1 and "walker" in names)
     why = [] if ok else ["did not end standing still and upright"]
     for k, v in need.items():
@@ -158,7 +164,7 @@ def build(cid: str, session, log=print) -> dict:
     xml, q0 = _setup(session, props, params)
     tr = Tracker(xml, TrackConfig(**spec.get("cfg", {})))
     try:
-        tape = tr.track(motion, q0, name=cid, log=None)
+        tape = tr.track(motion, q0, name=cid, log=None, from_ground=bool(spec.get("from_ground")))
     finally:
         tr.close()
     if spec.get("hurdle"):

@@ -211,6 +211,36 @@
   "arm_frames_adjusted": 0,
   "snaps_blended": 0
  },
+ "getup_front": {
+  "file": "getup_front.npz",
+  "title": "Get up (lying face down)",
+  "group": "Recovery",
+  "description": "Starts lying face down, pushes up with the arms, brings the feet under the body and stands.",
+  "source": "CMU Graphics Lab Motion Capture Database (mocap.cs.cmu.edu), subject 77 trial 17",
+  "url": "https://raw.githubusercontent.com/una-dinosauria/cmu-mocap/master/data/077/77_17.bvh",
+  "frames": null,
+  "duration_s": 5.98,
+  "speed": 1.0,
+  "props": [],
+  "retarget_error_m": 0.0943,
+  "arm_frames_adjusted": 0,
+  "snaps_blended": 3
+ },
+ "getup_back": {
+  "file": "getup_back.npz",
+  "title": "Get up (lying on the back)",
+  "group": "Recovery",
+  "description": "Starts lying on the back, sits up, turns over a hand onto the feet and stands.",
+  "source": "CMU Graphics Lab Motion Capture Database (mocap.cs.cmu.edu), subject 77 trial 18",
+  "url": "https://raw.githubusercontent.com/una-dinosauria/cmu-mocap/master/data/077/77_18.bvh",
+  "frames": null,
+  "duration_s": 7.1,
+  "speed": 1.0,
+  "props": [],
+  "retarget_error_m": 0.094,
+  "arm_frames_adjusted": 0,
+  "snaps_blended": 3
+ },
  "vertical_jump": {
   "file": "vertical_jump.npz",
   "title": "Vertical jump",

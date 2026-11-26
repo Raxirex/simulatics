@@ -185,6 +185,54 @@ def build_reference(model: mujoco.MjModel, motion: Motion, q_stand: np.ndarray, 
                            np.repeat(end[None], n_hold, axis=0)])
 
 
+def settle_lying(model: mujoco.MjModel, pose: np.ndarray, seconds: float = 1.2) -> np.ndarray:
+    """Where the robot comes to rest when it is laid down in `pose` and its servos hold that pose: the pose is
+    lifted clear of the floor, dropped, and simulated until still. This is the physical start state of a motion
+    that begins on the ground (a retargeted pose itself floats or sinks by a few centimetres)."""
+    _, qa, _ = free_root(model)
+    d = mujoco.MjData(model)
+    q = np.array(pose, float)
+    robot = np.flatnonzero(model.body_rootid[model.geom_bodyid] == model.body_rootid[1])
+    d.qpos[:] = q
+    mujoco.mj_kinematics(model, d)
+    low = float(np.min(d.geom_xpos[robot, 2] - model.geom_rbound[robot]))
+    q[qa + 2] += max(0.0, 0.01 - low)                        # nothing under the floor at the start
+    d.qpos[:] = q
+    d.qvel[:] = 0
+    act_q = np.array([model.jnt_qposadr[model.actuator_trnid[a, 0]] for a in range(model.nu)])
+    d.ctrl[:] = q[act_q]
+    mujoco.mj_forward(model, d)
+    mujoco.mj_step(model, d, int(round(seconds / model.opt.timestep)))
+    return d.qpos.copy()
+
+
+def build_reference_from_ground(model: mujoco.MjModel, motion: Motion, q_stand: np.ndarray, cfg: TrackConfig) -> np.ndarray:
+    """(T, nq) for a motion that starts on the ground: the settled lying pose, a short ease into the clip, the
+    clip, an ease to standing, a hold. Frame 0 is the start state (lying, at rest)."""
+    from .motion import yaw_of_quat, yaw_quat
+    _, qa, _ = free_root(model)
+    dt = cfg.control_steps * float(model.opt.timestep)
+    m = motion.resample(1.0 / dt) if abs(motion.fps - 1.0 / dt) > 1e-6 else motion
+    clip = m.qpos(model)
+    clip[:, qa:qa + 2] += q_stand[qa:qa + 2] - clip[0, qa:qa + 2]          # lie down where the robot stands
+    for i in range(len(clip)):                                              # non-robot coordinates (objects) as in the scene
+        pass
+    full = np.tile(q_stand, (len(clip), 1))
+    nrobot = len(clip[0])
+    full[:, :nrobot] = clip
+    clip = full
+    start = settle_lying(model, clip[0])
+    d = mujoco.MjData(model)
+    end = q_stand.copy()
+    end[qa:qa + 2] = clip[-1, qa:qa + 2]
+    end[qa + 3:qa + 7] = yaw_quat(float(yaw_of_quat(clip[-1, qa + 3:qa + 7])))
+    end[qa + 2] += _lowest_sole(model, d, clip[-1]) - _lowest_sole(model, d, end)
+    n_in, n_out, n_hold = (max(1, int(round(t / dt))) for t in (0.3, cfg.lead_out, cfg.hold))
+    k = min(n_in, len(clip) - 1)
+    return np.concatenate([start[None], _blend(start, clip[k], n_in, qa), clip[k + 1:], _blend(clip[-1], end, n_out, qa),
+                           np.repeat(end[None], n_hold, axis=0)])
+
+
 # =========================================================================================================
 # Tracker
 # =========================================================================================================
@@ -393,10 +441,10 @@ class Tracker:
         return targets, np.array(states), best_cost
 
     def track(self, motion: Motion, qpos0: np.ndarray, qvel0: np.ndarray | None = None, name: str = "",
-              log=None) -> Tape:
+              log=None, from_ground: bool = False) -> Tape:
         c, m = self.cfg, self.model
         t_start = time.perf_counter()
-        qref = build_reference(m, motion, qpos0, c)
+        qref = (build_reference_from_ground if from_ground else build_reference)(m, motion, qpos0, c)
         fref = self.ref_features(qref)
         qpos0 = qref[0].copy()
         d = self.scratch
