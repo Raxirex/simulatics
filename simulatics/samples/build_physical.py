@@ -61,6 +61,7 @@ def verify(session, tape, props: list[dict], params: dict | None, need: dict, se
     """Play a tape in the live session and measure what happened. Returns a report with "ok"."""
     from ..imitate.motion import quat_to_mat
     _builtin(session, props, params)
+    auto_reset, session.auto_reset = session.auto_reset, False      # report where it really ended, not a reset pose
     session.play_tape(tape)
     session.speed = 8.0
     falls0 = session.falls
@@ -88,6 +89,7 @@ def verify(session, tape, props: list[dict], params: dict | None, need: dict, se
         time.sleep(0.001)
     with session.lock:
         session.running = False
+        session.auto_reset = auto_reset
     m = tape.meta
     travel = float(np.linalg.norm(xy[-1] - xy[0]))
     box_top = max((2 * p["size"][2] for p in props if p.get("kind") == "terrain"), default=0.0)

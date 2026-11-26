@@ -77,7 +77,7 @@ class QuadWalkController:
     k_att_rate = 0.03        # s, the same on the roll / pitch rate
     k_height = 0.6           # leg extension per metre of height error
     # speeds
-    v_max = 0.70             # m/s forward along a path
+    v_max = 0.90             # m/s forward along a path
     v_back = 0.3             # m/s backward / final approach
     v_side = 0.25            # m/s sideways
     w_max = 1.5              # rad/s
@@ -93,6 +93,9 @@ class QuadWalkController:
     accept_yaw = math.radians(6.0)
     max_corrections = 3
     settle_time = 0.3        # s standing still before "done"
+    # a shove while standing: trot on the spot (the footholds then catch the body) instead of holding stiff
+    push_speed = 0.30        # m/s of the base
+    push_up = 0.96           # trunk up-vector z (about 16 deg of tilt)
 
     @staticmethod
     def supports(model: mujoco.MjModel) -> bool:
@@ -242,6 +245,7 @@ class QuadWalkController:
         self.goal_err, self.yaw_err = 0.0, 0.0
         self.corrections = 0
         self._settle = 0.0
+        self._recover = 0.0              # s left of trotting on the spot after a push
         self.cmd = [0.0, 0.0, 0.0]       # ramped command (vx, vy, wz) in the heading frame
         self._gait = False
         self.phase = 0.0
@@ -317,6 +321,7 @@ class QuadWalkController:
     def status(self) -> dict:
         """{"mode": "stand"|"walk"|"done"|"fallen", "message", "goal_error_m", "heading_error_deg" (None without
         a goal / final yaw), "footsteps": [] (a trot has no footstep plan), "support": "all"|"FL+RR"|"FR+RL",
+        "recovering": bool (trotting on the spot after a push),
         "speed": m/s, "gait_phase": 0..1 (None while standing), "command": [vx, vy, wz]}"""
         has_goal = self.goal_xy is not None
         if not self._gait:
@@ -327,7 +332,7 @@ class QuadWalkController:
                 "goal_error_m": self.goal_err if has_goal else None,
                 "heading_error_deg": (math.degrees(self.yaw_err)
                                       if has_goal and self._final_yaw is not None else None),
-                "speed": self.speed, "gait_phase": self.phase if self._gait else None,
+                "recovering": self._recover > 0.0, "speed": self.speed, "gait_phase": self.phase if self._gait else None,
                 "command": list(self.cmd)}
 
     # ------------------------------------------------------------------ control
@@ -382,6 +387,12 @@ class QuadWalkController:
             return
 
         want = self._command(px, py, yaw)                 # None = stand, else (vx, vy, wz)
+        if want is None and (self.speed > self.push_speed or r22 < self.push_up):
+            self._recover = 1.0                           # shoved while standing / stopping: trot on the spot
+        if self._recover > 0.0:
+            self._recover -= dt
+            if want is None:
+                want = (0.0, 0.0, 0.0)
         if want is None:
             tx = ty = tw = 0.0
         else:

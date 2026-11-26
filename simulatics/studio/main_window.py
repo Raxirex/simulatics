@@ -23,6 +23,7 @@ from .viewport import FLAGS, TOOLS, VIEWS, Viewport
 from .panels_run import SensorsPanel
 from .panels_motor import MotorPanel
 from .panels_world import WorldModelPanel
+from .panels_tools import ValidationPanel
 
 WORKSPACES = ["Layout", "Graph", "Train", "Sensors", "Animate", "Motors"]
 L, R, T, B = Qt.LeftDockWidgetArea, Qt.RightDockWidgetArea, Qt.TopDockWidgetArea, Qt.BottomDockWidgetArea
@@ -68,6 +69,7 @@ class StudioWindow(QMainWindow):
         self.pilot = PilotPanel(self)
         self.motor = MotorPanel(self)
         self.world_model = WorldModelPanel(self)
+        self.validation = ValidationPanel(self)
         self.graph_panel = GraphPanel(self)
         self.console.ns["graph"] = self.graph_panel.graph
         self.console.ns["world_model"] = self.world_model
@@ -82,6 +84,7 @@ class StudioWindow(QMainWindow):
                 ("results", "Results", self.results), ("train", "Training", self.train),
                 ("sensors", "Sensors", self.sensors), ("pilot", "AI Pilot", self.pilot),
                 ("motor", "Motor Control", self.motor), ("worldmodel", "World Model", self.world_model),
+                ("validation", "Validation", self.validation),
                 ("console", "Python", self.console), ("log", "Log", self.log_panel)):
             d = QDockWidget(title, self)
             d.setObjectName(f"dock_{key}")
@@ -154,6 +157,8 @@ class StudioWindow(QMainWindow):
         self.a_max = self._act("Maximise Panel", self.toggle_maximise, "Ctrl+Space", "frame", checkable=False,
                                tip="Fill the window with the viewport (or the panel under the mouse); again to go back")
         self.a_delete = self._act("Delete Selected Object", self.delete_selected_object, "Delete")
+        self.a_record = self._act("Record Viewport (GIF)", self.toggle_record, "Ctrl+R", "camera", checkable=True,
+                                  tip="Record the viewport; stop to save it as an animated GIF")
         self.tool_group = QActionGroup(self)
         self.tool_actions: dict[str, QAction] = {}
         for key, (label, shortcut, tip) in TOOLS.items():
@@ -185,6 +190,7 @@ class StudioWindow(QMainWindow):
         m.addAction(self._act("Open Robot Model...", self.robot_panel._open_file))
         m.addAction(self._act("Export Robot as MJCF...", self.robot_panel._export))
         m.addAction(self._act("Save Viewport Image...", self._save_image))
+        m.addAction(self.a_record)
         m.addSeparator()
         m.addAction(self._act("Quit", self.close, "Ctrl+Q"))
 
@@ -291,6 +297,7 @@ class StudioWindow(QMainWindow):
         self.view_box.activated.connect(lambda _i: self.viewport.set_view(self.view_box.currentText()))
         top.addWidget(self.view_box)
         top.addAction(self.a_max)
+        top.addAction(self.a_record)
         top.addSeparator()
         top.addAction(self.a_run)
         spacer = QWidget()
@@ -420,6 +427,50 @@ class StudioWindow(QMainWindow):
         if not from_outliner:
             self.outliner.show_body(body)
         self.inspector.show(kind, ident)
+
+    # ---- recording --------------------------------------------------------------------------------------
+    def toggle_record(self, on: bool | None = None) -> None:
+        """Start recording the viewport, or stop and save what was recorded as an animated GIF."""
+        on = (not getattr(self, "_rec_frames", None) is not None) if on is None else bool(on)
+        if on:
+            self._rec_frames = []
+            self._rec_timer = QTimer(self)
+            self._rec_timer.timeout.connect(self._rec_grab)
+            self._rec_timer.start(100)
+            self.say("Recording the viewport: press Ctrl+R again to stop and save (at most 60 s)")
+            return
+        frames, self._rec_frames = getattr(self, "_rec_frames", None) or [], None
+        if getattr(self, "_rec_timer", None) is not None:
+            self._rec_timer.stop()
+        self.a_record.setChecked(False)
+        if not frames:
+            return
+        path = getattr(self, "_rec_path", None)
+        if not path:
+            path, _ = QFileDialog.getSaveFileName(self, "Save the recording", "simulatics.gif", "Animated GIF (*.gif)")
+        if path:
+            self.save_gif(frames, path)
+
+    def _rec_grab(self) -> None:
+        if self._rec_frames is None:
+            return
+        img = self.viewport.grabFramebuffer()
+        if img.width() > 640:
+            img = img.scaledToWidth(640, Qt.SmoothTransformation)
+        self._rec_frames.append(img)
+        if len(self._rec_frames) >= 600:
+            self.toggle_record(False)
+
+    def save_gif(self, frames: list, path: str) -> None:
+        from PIL import Image
+        import numpy as np
+        out = []
+        for q in frames:
+            q = q.convertToFormat(q.Format.Format_RGB888)
+            a = np.frombuffer(q.constBits(), np.uint8, q.sizeInBytes()).reshape(q.height(), q.bytesPerLine())[:, :q.width() * 3]
+            out.append(Image.fromarray(a.reshape(q.height(), q.width(), 3).copy()).convert("P", palette=Image.ADAPTIVE, colors=128))
+        out[0].save(path, save_all=True, append_images=out[1:], duration=100, loop=0, optimize=False)
+        self.log(f"Recording saved: {path} ({len(out)} frames, {len(out) / 10:.0f} s)")
 
     # ---- projects and imports -------------------------------------------------------------------------
     def _title(self) -> None:
@@ -852,7 +903,7 @@ class StudioWindow(QMainWindow):
             split("outliner", "assets", V)
             split("inspector", "sensors", V)
             tab("inspector", "robot", "motors")
-            tab("timeline", "graph", "train", "results", "motor", "worldmodel", "pilot", "console", "log")
+            tab("timeline", "graph", "train", "results", "motor", "validation", "worldmodel", "pilot", "console", "log")
             show = list(d)
             sizes = ([d["outliner"], d["viewport"], d["inspector"]], [270, 1000, 380], H),                     ([d["viewport"], d["timeline"]], [640, 250], V), ([d["inspector"], d["sensors"]], [470, 330], V),                     ([d["outliner"], d["assets"]], [430, 370], V)
             front = ["inspector", "timeline"]

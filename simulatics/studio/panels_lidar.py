@@ -92,6 +92,10 @@ class CloudView(QWidget):
         self._starts = np.zeros(1, np.int64)  # bin k is _sorted[_starts[k]:_starts[k + 1]]
         self._colors: list[QColor] = []
         self._legend = ""
+        self._version = 0                     # bumped whenever the binned points change
+        self._cloud_key = None                # what the cached cloud layer shows
+        self._cloud_n = 0
+        self.last_bin_ms = 0.0                # how long the last colour binning took
         # interaction
         self._press = None
         self._dragging = False
@@ -230,6 +234,12 @@ class CloudView(QWidget):
 
     def _rebin(self) -> None:
         """Sort the points into colour bins once, so a redraw is a handful of drawPoints calls."""
+        t0 = time.perf_counter()
+        self._rebin_now()
+        self._version += 1
+        self.last_bin_ms = (time.perf_counter() - t0) * 1000.0
+
+    def _rebin_now(self) -> None:
         self._dirty = False
         pts, n = self._pts, len(self._pts)
         mode = self.color_mode
@@ -277,7 +287,20 @@ class CloudView(QWidget):
     def _draw_points(self, p: QPainter, w: int, h: int, stride: int) -> int:
         """The cloud, one drawPoints call per colour bin. Points are drawn one pixel wide into a transparent
         layer, which is then stamped size x size times: far cheaper than a wide pen for hundreds of thousands
-        of points, and the cost hardly depends on the point size."""
+        of points, and the cost hardly depends on the point size. The finished layer is kept, so a redraw
+        that only moves the robot or replaces the latest scan does not touch the cloud again."""
+        s = self.point_size
+        key = (self._version, self.az, self.el, self.dist, tuple(self.target), w, h, s, stride)
+        if key != self._cloud_key or "cloud" not in self._layers:
+            self._cloud_n = self._render_cloud(w, h, stride)
+            self._cloud_key = key
+        if self._cloud_n:
+            p.drawImage(0, 0, self._layers["cloud"])
+        return self._cloud_n
+
+    def _render_cloud(self, w: int, h: int, stride: int) -> int:
+        s = self.point_size
+        out = self._layer("cloud", w, h)
         pts = self._sorted[::stride] if stride > 1 else self._sorted
         if not len(pts):
             return 0
@@ -289,7 +312,6 @@ class CloudView(QWidget):
         x += np.float32(0.5 * w)
         y = cam[:, 1] * (-inv)
         y += np.float32(0.5 * h)
-        s = self.point_size
         ok = (z > near) & (x >= 0) & (x < w - (s - 1)) & (y >= 0) & (y < h - (s - 1))
         sel = np.flatnonzero(ok)
         if not len(sel):
@@ -300,7 +322,7 @@ class CloudView(QWidget):
         np.floor(xy, out=xy)
         xy += 0.5                                                          # pixel centres: crisp single pixels
         cuts = np.searchsorted(sel, (self._starts + stride - 1) // stride)
-        layer = self._layer("points", w, h)
+        layer = out if s == 1 else self._layer("points", w, h)
         lp = QPainter(layer)
         for k, color in enumerate(self._colors):
             a, b = int(cuts[k]), int(cuts[k + 1])
@@ -308,16 +330,16 @@ class CloudView(QWidget):
                 lp.setPen(QPen(color, 0))
                 lp.drawPoints(_polygon(xy[a:b]))
         lp.end()
-        if s == 1:
-            p.drawImage(0, 0, layer)
-        else:                                                              # widen: s stamps across, then s down
+        if s > 1:                                                          # widen: s stamps across, then s down
             wide = self._layer("wide", w, h)
             wp = QPainter(wide)
             for i in range(s):
                 wp.drawImage(i, 0, layer)
             wp.end()
+            op = QPainter(out)
             for j in range(s):
-                p.drawImage(0, j, wide)
+                op.drawImage(0, j, wide)
+            op.end()
         return len(sel)
 
     def _draw_grid(self, p: QPainter, w: int, h: int) -> None:
@@ -449,11 +471,18 @@ class CloudView(QWidget):
         stride = 1
         if self._dragging and len(self._pts) > DRAG_POINTS:
             stride = int(math.ceil(len(self._pts) / DRAG_POINTS))
-        p = QPainter(self)
+        w, h = self.width(), self.height()
+        frame = self._layers.get("frame")         # composed off screen, then one blit (also on scaled displays)
+        if frame is None or frame.width() != w or frame.height() != h:
+            frame = self._layers["frame"] = QImage(w, h, QImage.Format_ARGB32_Premultiplied)
+        fp = QPainter(frame)
         try:
-            self._paint(p, self.width(), self.height(), stride)
+            self._paint(fp, w, h, stride)
         finally:
-            p.end()
+            fp.end()
+        p = QPainter(self)
+        p.drawImage(0, 0, frame)
+        p.end()
 
     # ------------------------------------------------------------------ mouse
     def _moving(self) -> None:
@@ -516,6 +545,7 @@ class LidarCloudPanel(QWidget):
         self.studio = studio
         self.view = CloudView(self)
         self._shown = None                       # what the view currently shows: (cloud id, seq, scan id, pose)
+        self._not_before = 0.0                   # no new cloud is pushed before this time (keeps the interface free)
 
         self.record = QCheckBox("Record")
         self.record.setToolTip("Add every lidar scan to the cloud")
@@ -663,9 +693,13 @@ class LidarCloudPanel(QWidget):
         with self._lock():
             pose = self._pose(sess)
             scan = getattr(sess, "lidar_points", None)
-            scan_id = id(scan)
+            scan_id = getattr(sess, "lidar_seq", None)
+            if scan_id is None:
+                scan_id = id(scan)               # the session replaces the array with every scan
             if not getattr(getattr(sess, "lidar_cfg", None), "enabled", True):
                 scan = None                      # the lidar is off: its last scan is stale
+            if scan is not None:
+                scan = np.array(scan, np.float32).reshape(-1, 3)        # a copy, taken under the lock
         if cloud is None:
             pts = stamps = traj = None
             seq = -1
@@ -679,12 +713,14 @@ class LidarCloudPanel(QWidget):
                 pts, stamps = pts[:n], stamps[:n]
         key = (id(cloud), seq, scan_id if scan is not None else None,
                None if pose is None else tuple(round(v, 2) for v in pose))
-        if force or key != self._shown or seq is None:
+        now = time.monotonic()
+        if force or ((key != self._shown or seq is None) and now >= self._not_before):
             self._shown = key
-            if scan is not None:
-                scan = np.array(scan, np.float32).reshape(-1, 3)        # the session replaces or reuses it: copy
             self.view.set_cloud(pts, stamps, traj, scan, pose, seq=seq)
             self._label(cloud)
+            # a big cloud takes a while to colour and draw: leave the interface twice that long to itself
+            cost = self.view.last_draw_ms + self.view.last_bin_ms
+            self._not_before = now + (3e-3 * cost if cost > 20.0 else 0.0)
         if self.follow.isChecked():
             if pose is not None:
                 self.view.set_look_at(pose[:2])

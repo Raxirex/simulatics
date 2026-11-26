@@ -549,6 +549,27 @@ class Viewport(QOpenGLWidget):
             if body >= 0 and self.cam.type != mujoco.mjtCamera.mjCAMERA_FIXED:
                 self.cam.lookat[:] = point
 
+    def keyPressEvent(self, e) -> None:
+        """Arrow keys drive the robot (with the viewport focused): up = walk ahead, left / right = turn that
+        way while walking, down = stop."""
+        key = e.key()
+        s = self.sess
+        if key not in (Qt.Key_Up, Qt.Key_Down, Qt.Key_Left, Qt.Key_Right) or s.task is None:
+            return super().keyPressEvent(e)
+        with s.lock:
+            x, y = float(s.data.qpos[0]), float(s.data.qpos[1])
+            w, qx, qy, qz = s.data.qpos[3:7]
+            yaw = float(np.arctan2(2 * (w * qz + qx * qy), 1 - 2 * (qy * qy + qz * qz)))
+            if key == Qt.Key_Down:
+                s.nav.clear()
+                self.message.emit("Stop")
+                return
+            turn = {Qt.Key_Left: 0.9, Qt.Key_Right: -0.9}.get(key, 0.0)
+            dist = 1.0 if turn == 0.0 else 0.7
+            s.nav.set_goal([x + dist * np.cos(yaw + turn), y + dist * np.sin(yaw + turn)])
+            s.running = True
+        self.message.emit("Arrow keys drive the robot: up ahead, left / right turn, down stop")
+
     def wheelEvent(self, e) -> None:
         if self.scn is None or self.cam.type == mujoco.mjtCamera.mjCAMERA_FIXED:
             return

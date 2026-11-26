@@ -142,6 +142,9 @@ class SkillSpec:
     jitter_props: float = 0.01             # m, object position variation
     report: Callable[[Rollout], dict] | None = None     # numbers worth showing about the best attempt
     trained: bool = True                   # False: defined, but no shipped result (experimental)
+    start: Callable | None = None          # start(model, standing qpos) -> qpos to begin from (lying down, say)
+    mirror: bool = False                   # joints are named without a side ("hip_y"): left and right move alike
+    to_stand: bool = False                 # the baseline command eases from the start pose to standing over the move
 
 
 @dataclass
@@ -251,11 +254,22 @@ class SkillEnv:
         self.n_settle = int(round(spec.settle / self.dt))
         self.T = self.n_move + self.n_settle
         act_of = {m.joint(int(m.actuator_trnid[a, 0])).name: a for a in range(m.nu)}
-        missing = [j for j in spec.joints if j not in act_of]
-        if missing:
-            raise ValueError(f"skill '{spec.id}': no motor on joints {missing}")
-        self.act = np.array([act_of[j] for j in spec.joints])
-        self.qpos0, self.ctrl0 = np.array(qpos0, float), np.array(ctrl0, float)
+        # which motors each program channel drives, and with which sign: (nu, J)
+        self.mix = np.zeros((m.nu, len(spec.joints)))
+        for k, j in enumerate(spec.joints):
+            if spec.mirror and f"left_{j}" in act_of and f"right_{j}" in act_of:
+                self.mix[act_of[f"left_{j}"], k] = 1.0
+                # sideways and twisting joints mirror with the opposite sign; forward-bending ones with the same
+                self.mix[act_of[f"right_{j}"], k] = -1.0 if j.endswith(("_x", "_z")) else 1.0
+            elif j in act_of:
+                self.mix[act_of[j], k] = 1.0
+            else:
+                raise ValueError(f"skill '{spec.id}': no motor on joint {j}")
+        self.act = np.flatnonzero(np.abs(self.mix).sum(axis=1) > 0)
+        self.q_stand, self.ctrl_stand = np.array(qpos0, float), np.array(ctrl0, float)
+        self.qpos0 = np.array(spec.start(self.plain, self.q_stand), float) if spec.start else self.q_stand.copy()
+        act_q = np.array([m.jnt_qposadr[m.actuator_trnid[a, 0]] for a in range(m.nu)])
+        self.ctrl0 = self.qpos0[act_q].copy() if spec.start else self.ctrl_stand.copy()
         kp = m.actuator_gainprm[:, 0]
         reach = np.where(kp > 0, m.actuator_forcerange[:, 1] / np.maximum(kp, 1e-9), 0.0) * 1.5
         self.lo, self.hi = m.actuator_ctrlrange[:, 0] - reach, m.actuator_ctrlrange[:, 1] + reach
@@ -280,8 +294,13 @@ class SkillEnv:
 
     def commands(self, theta: np.ndarray) -> np.ndarray:
         """(n, T, nu) servo targets."""
-        u = np.tile(self.ctrl0, (len(theta), self.T, 1))
-        u[:, :, self.act] += self.offsets(theta)
+        if self.spec.to_stand:                 # baseline: ease from the start pose to the standing command
+            w = np.clip(np.arange(self.T) / max(self.n_move - 1, 1), 0.0, 1.0)
+            w = (3 * w ** 2 - 2 * w ** 3)[:, None]
+            base = (1 - w) * self.ctrl0 + w * self.ctrl_stand
+        else:
+            base = np.tile(self.ctrl0, (self.T, 1))
+        u = base[None] + self.offsets(theta) @ self.mix.T
         return np.clip(u, self.lo, self.hi)
 
     def starts(self, n: int, rng: np.random.Generator | None) -> np.ndarray:
@@ -306,8 +325,10 @@ class SkillEnv:
         ctrl = np.repeat(u, self.cfg.control_steps, axis=1)
         st, sens = self.backend.rollout(np.tile(starts, (n, 1)), ctrl)
         k = self.cfg.control_steps
-        return Rollout(self.model, st[:, k - 1::k], sens[:, k - 1::k], self.layout, self.dt,
-                       np.repeat(self.offsets(theta), v, axis=0))
+        r = Rollout(self.model, st[:, k - 1::k], sens[:, k - 1::k], self.layout, self.dt,
+                    np.repeat(self.offsets(theta), v, axis=0))
+        r.q_stand = self.q_stand
+        return r
 
 
 # =========================================================================================================
@@ -432,7 +453,8 @@ class SkillTrainer:
         from ..imitate.physical import TrackConfig, Tracker
         tr = Tracker(env.xml, TrackConfig(control_steps=self.cfg.control_steps, passes=3, threads=self.cfg.threads))
         try:
-            back, back_states, back_cost = tr.settle_to(d.qpos.copy(), d.qvel.copy(), env.qpos0)
+            back, back_states, back_cost = tr.settle_to(d.qpos.copy(), d.qvel.copy(), env.q_stand,
+                                                         where_it_is=self.spec.start is not None)
         finally:
             tr.close()
         ctrl = np.concatenate([ctrl, back])
@@ -442,7 +464,7 @@ class SkillTrainer:
                "stayed_standing_of_24": int(many.stays_standing().sum()), "final_up": float(r.up[0, -1]),
                "feet_moved_m": float(r.feet_moved()[0]), "end_speed": float(r.ends_at_rest()[0]),
                "return_to_stance_cost": float(back_cost),
-               "final_height_error_m": float(abs(states[-1][2] - env.qpos0[2]))}
+               "final_height_error_m": float(abs(states[-1][2] - env.q_stand[2]))}
         if self.spec.report:
             rep.update({k: (float(v) if np.isscalar(v) or getattr(v, "ndim", 1) == 0 else v) for k, v in self.spec.report(r).items()})
         self.report = rep

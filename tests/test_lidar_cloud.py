@@ -432,12 +432,64 @@ def test_view_is_fast_enough(app):
     view.render_image(900, 600)                            # warm up: colour bins, layers
     best = 1e9
     for _ in range(5):
+        view.az += 0.01                                    # a new camera each time: the cloud really is redrawn
         t = time.perf_counter()
         img = view.render_image(900, 600)
         best = min(best, time.perf_counter() - t)
     assert view.last_drawn > 150_000
     print(f"\nrender_image(900, 600) with 200k points: {best * 1000:.1f} ms")
     assert not img.isNull() and best < 0.25
+
+
+def test_widget_paints_and_thins_while_dragging(app):
+    from simulatics.studio.panels_lidar import DRAG_POINTS, CloudView
+    rng = np.random.default_rng(8)
+    n = 250_000
+    pts = rng.uniform([-10, -10, 0], [10, 10, 3], (n, 3)).astype(np.float32)
+    view = CloudView()
+    view.resize(900, 600)
+    view.show()
+    app.processEvents()
+    try:
+        view.set_cloud(pts, None, pts[:50], pts[:1500], (0.0, 0.0, 0.0))
+        view.fit()
+        full = pixels(view.grab().toImage())                 # the real paintEvent
+        assert view.last_drawn > 0.9 * n
+        rendered = pixels(view.render_image(view.width(), view.height()))
+        if full.shape == rendered.shape:                     # (a scaled display grabs a bigger image)
+            assert np.count_nonzero(full != rendered) < 0.01 * full.size
+        times = []
+        for _ in range(5):
+            view.az += 0.01
+            t = time.perf_counter()
+            view.grab()
+            times.append(time.perf_counter() - t)
+        view._dragging = True                                # as while a mouse button is held and moving
+        view.az += 0.01
+        light = pixels(view.grab().toImage())
+        stride = -(-n // DRAG_POINTS)
+        assert stride > 1 and 0.9 * n / stride < view.last_drawn <= n / stride + 1
+        assert np.count_nonzero(light != light[0, 0]) > 5000
+        drag = []
+        for _ in range(5):
+            view.az += 0.01
+            t = time.perf_counter()
+            view.grab()
+            drag.append(time.perf_counter() - t)
+        view._dragging = False
+        view.grab()
+        assert view.last_drawn > 0.9 * n
+        t = time.perf_counter()                              # same camera, new scan only: the cloud layer is reused
+        view.set_cloud(pts, None, pts[:50], pts[1500:3000], (0.1, 0.0, 0.0), seq=None)
+        view._dirty = False
+        view.grab()
+        scan_only = time.perf_counter() - t
+        print(f"\nwidget repaint with 250k points (screen scale {view.devicePixelRatioF():g}): "
+              f"full {min(times) * 1000:.1f} ms, dragging {min(drag) * 1000:.1f} ms, "
+              f"new scan only {scan_only * 1000:.1f} ms")
+        assert min(drag) < min(times) and min(times) < 0.3
+    finally:
+        view.close()
 
 
 # ---------------------------------------------------------------------------------------------- the panel
@@ -478,15 +530,30 @@ def test_panel_refresh_clear_record(app):
         panel.refresh()
         assert panel.view._pts is pushed and panel.view._seq == seq
         sess.cloud.add(np.array([[40.0, 40.0, 1.0]]), time=9.0)
+        panel._not_before = 0.0                              # (after a slow redraw the panel waits before the next)
         panel.refresh()
         assert len(panel.view._pts) == n + 1
 
         panel.follow.setChecked(True)                       # follow: the look-at point rides on the robot
         sess.data.qpos[:2] = [3.0, -1.0]
+        panel._not_before = 0.0
         panel.refresh()
         np.testing.assert_allclose(panel.view.target[:2], [3.0, -1.0])
         assert panel.view._robot[:2] == pytest.approx((3.0, -1.0))
         panel.follow.setChecked(False)
+
+        scan = sess.lidar_points + np.float32(0.5)           # a new scan alone (robot still, nothing new seen)
+        sess.lidar_points = scan
+        panel._not_before = 0.0
+        panel.refresh()
+        np.testing.assert_array_equal(panel.view._scan, scan)
+        sess.cloud.add(np.array([[41.0, 40.0, 1.0]]))
+        panel._not_before = time.monotonic() + 60            # still busy with the last redraw: not yet
+        panel.refresh()
+        assert len(panel.view._pts) == n + 1
+        panel._not_before = 0.0
+        panel.refresh()
+        assert len(panel.view._pts) == n + 2
 
         panel.record.click()                                # Record is bound to sess.cloud_on, both ways
         assert sess.cloud_on is False

@@ -395,7 +395,7 @@ class Tracker:
         return np.array(out)
 
     def settle_to(self, qpos: np.ndarray, qvel: np.ndarray, q_stand: np.ndarray, blend: float = 0.6,
-                  hold: float = 1.2, log=None) -> tuple[np.ndarray, np.ndarray, float]:
+                  hold: float = 1.2, log=None, where_it_is: bool = False) -> tuple[np.ndarray, np.ndarray, float]:
         """Commands that bring the robot from any moving state back to a standing pose and keep it there, with
         balance (the same windowed search as track()). Returns (ctrl (n, nu), simulated qpos (n + 1, nq), cost).
         Used to end a trained move in the stance the balance controller takes over from."""
@@ -406,6 +406,10 @@ class Tracker:
                   and m.jnt_type[j] != mujoco.mjtJoint.mjJNT_FREE]
         target[nrobot] = q_stand[nrobot]
         target[qa:qa + 7] = q_stand[qa:qa + 7]
+        if where_it_is:                                     # stand up where the robot is now, facing as it faces
+            from .motion import yaw_of_quat, yaw_quat
+            target[qa:qa + 2] = np.asarray(qpos, float)[qa:qa + 2]
+            target[qa + 3:qa + 7] = yaw_quat(float(yaw_of_quat(np.asarray(qpos, float)[qa + 3:qa + 7])))
         qref = np.concatenate([np.array(qpos, float)[None], _blend(np.array(qpos, float), target, max(1, int(round(blend / dt))), qa),
                                np.repeat(target[None], max(1, int(round(hold / dt))), axis=0)])
         fref = self.ref_features(qref)

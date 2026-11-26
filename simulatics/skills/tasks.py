@@ -84,7 +84,56 @@ def kick_report(r: Rollout) -> dict:
     return {"ball_travel_m": ball[0, -1, 0] - ball[0, 0, 0], "ball_top_speed_mps": r.prop_vel(0)[0, :, 0].max()}
 
 
+# -------------------------------------------------------------------------------------------------- get up
+GETUP_PARAMS = {"hip_torque": 300.0, "knee_torque": 360.0, "ankle_torque": 180.0, "abdomen_torque": 200.0, "arm_torque": 150.0}
+GETUP_JOINTS = ["shoulder_y", "shoulder_x", "elbow", "hip_y", "knee", "ankle_y", "abdomen_y"]
+
+
+def _lying(face_down: bool):
+    def start(model, q_stand):
+        from ..imitate.physical import settle_lying
+        q = np.array(q_stand, float)
+        hinge = [model.jnt_qposadr[j] for j in range(model.njnt) if model.jnt_type[j] == 3]
+        q[hinge] = 0.0                                             # straight legs, arms along the body
+        a = np.pi / 4 if face_down else -np.pi / 4                # half of +-90 degrees about the sideways axis
+        q[3:7] = (np.cos(a), 0.0, np.sin(a), 0.0)
+        q[2] = 0.3
+        return settle_lying(model, q, seconds=1.5)
+    return start
+
+
+def getup_reward(r: Rollout) -> np.ndarray:
+    """End up standing: as high and upright as the standing pose, at rest, in the standing posture."""
+    z = np.clip(r.qpos[:, :, 2] / r.q_stand[2], 0.0, 1.05)
+    up = np.maximum(r.up, 0.0)
+    k = r.T // 3
+    dense = (z[:, k:] * up[:, k:]).mean(axis=1)                    # be up for as much of the later part as possible
+    final = z[:, -1] * up[:, -1]
+    hinge = [r.model.jnt_qposadr[j] for j in range(r.model.njnt) if r.model.jnt_type[j] == 3 and "gripper" not in r.model.joint(j).name]
+    pose = np.abs(r.qpos[:, -1][:, hinge] - r.q_stand[hinge]).mean(axis=1)
+    stood = ((z[:, -1] > 0.93) & (r.up[:, -1] > 0.95)).astype(float)
+    return (4.0 * dense + 8.0 * final + 4.0 * stood - 2.0 * np.minimum(r.ends_at_rest(), 2.0) - 2.0 * np.minimum(pose, 1.0)
+            - 0.03 * r.effort())
+
+
+def getup_report(r: Rollout) -> dict:
+    return {"final_height_fraction": r.qpos[0, -1, 2] / r.q_stand[2], "final_upright": r.up[0, -1],
+            "start_height_m": r.qpos[0, 0, 2], "time_to_stand_s": float(np.argmax(r.qpos[0, :, 2] > 0.9 * r.q_stand[2]) * r.dt)}
+
+
 SKILLS: dict[str, SkillSpec] = {
+    "getup_front": SkillSpec(
+        "getup_front", "Get up (from lying face down)",
+        "From lying face down on the floor, at rest, to standing. Left and right move alike. Uses the athletic motor "
+        "preset with stronger arms.",
+        joints=GETUP_JOINTS, reward=getup_reward, duration=4.0, settle=1.0, knots=14, sigma=0.6, params=GETUP_PARAMS,
+        start=_lying(True), mirror=True, to_stand=True, report=getup_report, jitter_pose=0.02),
+    "getup_back": SkillSpec(
+        "getup_back", "Get up (from lying on the back)",
+        "From lying on the back, at rest, to standing. Left and right move alike. Uses the athletic motor preset with "
+        "stronger arms.",
+        joints=GETUP_JOINTS, reward=getup_reward, duration=4.0, settle=1.0, knots=14, sigma=0.6, params=GETUP_PARAMS,
+        start=_lying(False), mirror=True, to_stand=True, report=getup_report, jitter_pose=0.02),
     "uppercut": SkillSpec(
         "uppercut", "Uppercut",
         "A rising punch with the right fist that knocks a ball off a tee at chest height, keeping both feet planted "

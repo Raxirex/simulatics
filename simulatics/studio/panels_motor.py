@@ -92,6 +92,26 @@ class MotorPanel(QWidget):
             self.gains[field] = sp
         lay.addWidget(gb)
 
+        gb = QGroupBox("Fit the model to a recording (system identification)")
+        v = QVBoxLayout(gb)
+        v.addWidget(dim("Adjusts this joint's damping, rotor inertia and dry friction until the simulation reproduces "
+                        "a recorded response: the one on the scope, or a log from a real motor (CSV with time, "
+                        "target, angle)."))
+        self.fit_gains = QCheckBox("Also fit the servo gains kp and kv")
+        v.addWidget(self.fit_gains)
+        row = QHBoxLayout()
+        for label, fn in (("Fit to the scope", self._fit_scope), ("Fit to a file...", self._fit_file),
+                          ("Save recording...", self._save_rec), ("Self-test", self._self_test)):
+            b = QPushButton(label)
+            b.clicked.connect(lambda _=False, fn=fn: fn())
+            row.addWidget(b)
+        v.addLayout(row)
+        self.fit_text = QLabel("")
+        self.fit_text.setFont(theme.mono())
+        self.fit_text.setTextInteractionFlags(Qt.TextSelectableByMouse)
+        v.addWidget(self.fit_text)
+        lay.addWidget(gb)
+
         gb = QGroupBox("Measured response")
         v = QVBoxLayout(gb)
         self.metrics = QLabel("")
@@ -190,6 +210,80 @@ class MotorPanel(QWidget):
         c = self.sess.controller
         if getattr(c, "signal", None) is not None:
             c.signal = None
+
+    # -- system identification
+    def _fields(self) -> tuple:
+        from .. import sysid
+        return sysid.DEFAULT_FIT + (("kp", "kv") if self.fit_gains.isChecked() else ())
+
+    def _show_fit(self, r: dict, title: str) -> None:
+        lines = [title, f"{'':14s}{'before':>10s}{'fitted':>10s}" + (f"{'truth':>10s}" if "truth" in r else "")]
+        for f in r["fields"]:
+            lines.append(f"{f:14s}{r['before'][f]:10.4g}{r['fitted'][f]:10.4g}" + (f"{r['truth'][f]:10.4g}" if "truth" in r and f in r["truth"] else ""))
+        k = self._unit()
+        lines.append(f"error (rms)   {r['rms_before'] * k:10.4f}{r['rms_after'] * k:10.4f}  {'deg' if k != 1 else 'm'}")
+        self.fit_text.setText("\n".join(lines))
+        self.fit_result = r
+
+    def _fit(self, rec: dict, title: str, apply: bool = True) -> None:
+        from .. import sysid
+        a = self._i()
+        fields = self._fields()
+        self.fit_text.setText("fitting...")
+
+        def done(result, error):
+            if error:
+                self.fit_text.setText(error)
+                return
+            self._show_fit(result, title)
+            if apply and result["improved"]:
+                sysid.apply(self.sess, a, result)
+                self._select()
+                self.studio.log(f"Fitted {self.motor.currentText()}: error {result['rms_before']:.4f} -> {result['rms_after']:.4f} rad; values applied")
+        self.studio.run_async(lambda: sysid.fit_motor(self.sess, {**rec, "actuator": a}, fields), done, "sysid")
+
+    def _fit_scope(self) -> None:
+        from .. import sysid
+        try:
+            self._fit(sysid.record(self.sess, self._i()), "Fitted to the scope recording (values applied)")
+        except Exception as e:  # noqa: BLE001
+            self.fit_text.setText(str(e))
+
+    def _fit_file(self) -> None:
+        from PySide6.QtWidgets import QFileDialog
+        from .. import sysid
+        path, _ = QFileDialog.getOpenFileName(self, "A recorded response: time, target, angle", "", "Table (*.csv)")
+        if path:
+            try:
+                self._fit(sysid.load_csv(path), "Fitted to the file (values applied)")
+            except Exception as e:  # noqa: BLE001
+                self.fit_text.setText(str(e))
+
+    def _save_rec(self) -> None:
+        from PySide6.QtWidgets import QFileDialog
+        from .. import sysid
+        try:
+            rec = sysid.record(self.sess, self._i())
+        except Exception as e:  # noqa: BLE001
+            self.fit_text.setText(str(e))
+            return
+        path, _ = QFileDialog.getSaveFileName(self, "Save the recording", f"{self.motor.currentText()}.csv", "Table (*.csv)")
+        if path:
+            sysid.save_csv(rec, path)
+            self.studio.log(f"Recording saved to {path}")
+
+    def _self_test(self) -> None:
+        """Hide a change in this joint, record, and fit it back: shows that the fit recovers what it should."""
+        from .. import sysid
+        a = self._i()
+        self.fit_text.setText("self-test: hiding a change, recording 4 s, fitting...")
+
+        def done(result, error):
+            if error:
+                self.fit_text.setText(error)
+            else:
+                self._show_fit(result, "Self-test: a hidden change, found again from the recording")
+        self.studio.run_async(lambda: sysid.self_test(self.sess, a), done, "sysid self-test")
 
     def _gain(self, field: str, value: float) -> None:
         if not self._quiet:
