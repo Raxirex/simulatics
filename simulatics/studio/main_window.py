@@ -70,6 +70,8 @@ class StudioWindow(QMainWindow):
         self.motor = MotorPanel(self)
         self.world_model = WorldModelPanel(self)
         self.validation = ValidationPanel(self)
+        from .panels_lidar import LidarCloudPanel
+        self.lidar3d = LidarCloudPanel(self)
         self.graph_panel = GraphPanel(self)
         self.console.ns["graph"] = self.graph_panel.graph
         self.console.ns["world_model"] = self.world_model
@@ -84,7 +86,7 @@ class StudioWindow(QMainWindow):
                 ("results", "Results", self.results), ("train", "Training", self.train),
                 ("sensors", "Sensors", self.sensors), ("pilot", "AI Pilot", self.pilot),
                 ("motor", "Motor Control", self.motor), ("worldmodel", "World Model", self.world_model),
-                ("validation", "Validation", self.validation),
+                ("validation", "Validation", self.validation), ("lidar3d", "Lidar 3D", self.lidar3d),
                 ("console", "Python", self.console), ("log", "Log", self.log_panel)):
             d = QDockWidget(title, self)
             d.setObjectName(f"dock_{key}")
@@ -253,7 +255,7 @@ class StudioWindow(QMainWindow):
             sub.addAction(self._act(name, lambda name=name: (self.apply_workspace("Graph"), self.graph_panel.load_example(name))))
 
         from .. import samples
-        m = mb.addMenu("Sa&mples")
+        m = self.samples_menu = mb.addMenu("Sa&mples")
         m.setToolTipsVisible(True)
         groups: dict[str, object] = {}
         for sm in samples.SAMPLES.values():
@@ -263,6 +265,9 @@ class StudioWindow(QMainWindow):
                           lambda sid=sm.id: self.run_sample(sid))
             a.setToolTip(sm.description + (("\n" + "Source: " + sm.source) if sm.source else ""))
             sub.addAction(a)
+
+        self.samples_menu.addSeparator()
+        self.samples_menu.addAction(self._act("Jump onto a box of any height...", self.box_jump_dialog))
 
         m = mb.addMenu("&Help")
         m.addAction(self._act("Shortcuts", self._shortcuts))
@@ -718,6 +723,32 @@ class StudioWindow(QMainWindow):
         self.viewport.set_tool("place")
         self.say(f"Click the robot to mount the {acc_type}. The simulation is paused while you place things.")
 
+    def box_jump_dialog(self) -> None:
+        text = ("Box height in metres (0.10 to 1.40). A height tried before is replayed at once; a new one takes "
+                "one to three minutes of searching, during which the simulation is busy.")
+        h, ok = QInputDialog.getDouble(self, "Jump onto a box", text, 0.45, 0.10, 1.40, 2)
+        if ok:
+            self.box_jump(h)
+
+    def box_jump(self, height: float) -> None:
+        """Try to jump onto a box of this height (samples/boxjump.py) and say honestly how it went."""
+        from ..samples import boxjump
+        if getattr(self, "_box_busy", False):
+            self.log("A box-jump search is already running.")
+            return
+        self._box_busy = True
+        self.log(f"Box jump, {height:.2f} m: looking for a way" + (" (using the arms)" if height >= boxjump.ARMS_FROM else "") + " ...")
+
+        def done(result, error):
+            self._box_busy = False
+            self.log(f"Box jump failed to run: {error}" if error else result["message"])
+            self.timeline.rec.clear()
+            self.keep_object("")
+            self.viewport.set_camera("Follow")
+            self.viewport.frame_robot()
+            self._fill_cameras()
+        self.run_async(lambda: boxjump.attempt(self.sess, height), done, "box jump")
+
     def run_sample(self, sample_id: str) -> None:
         from .. import samples
         try:
@@ -814,6 +845,7 @@ class StudioWindow(QMainWindow):
             self.train.refresh()
             self.pilot.refresh()
             self.motor.refresh()
+            self.lidar3d.refresh()
             self.world_model.refresh()
             self.st_sim.setText(f"{'running' if s.running else 'paused'}  {s.speed:g}x   t {float(s.data.time):.2f} s   falls {s.falls}")
             self.st_ctrl.setText(f"{s.robot_name if s.custom_path else 'built-in humanoid'}   controller: {getattr(s.controller, 'name', 'none')}")
@@ -902,6 +934,7 @@ class StudioWindow(QMainWindow):
             split("viewport", "timeline", V)
             split("outliner", "assets", V)
             split("inspector", "sensors", V)
+            tab("sensors", "lidar3d")
             tab("inspector", "robot", "motors")
             tab("timeline", "graph", "train", "results", "motor", "validation", "worldmodel", "pilot", "console", "log")
             show = list(d)

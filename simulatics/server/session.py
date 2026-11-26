@@ -100,6 +100,9 @@ class SimSession:
         self._slam_t = -1.0
         self.nav_on_slam = False         # plan with the SLAM map and the SLAM pose
         from collections import deque
+        from ..sim.cloud import PointCloudMap
+        self.cloud = PointCloudMap()          # everything the lidar has hit so far (the Lidar 3D view)
+        self.cloud_on = True
         self.motor_overrides: dict[str, dict[str, float]] = {}   # motor name -> {field: value}: edits that survive rebuilds
         self.motor_trace: deque = deque(maxlen=6000)   # (time, target, angle, speed, torque) of the traced motor
         self._trace_act: int | None = None
@@ -1058,6 +1061,8 @@ class SimSession:
             self.lidar_points = pts[hit].astype(np.float32)
             self.lidar_seq += 1
             self.grid.integrate_lidar(origin, pts, hit, self.lidar_cfg.h_samples)
+            if self.cloud_on and self.running:
+                self.cloud.add(self.lidar_points, origin, float(self.data.time))
             if self.lidar_seq % 5 == 0:
                 self.map_seq += 1
         # SLAM runs on simulation time (10 Hz), so fast-forwarding does not stretch the motion between scans

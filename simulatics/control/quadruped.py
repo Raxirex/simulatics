@@ -319,8 +319,9 @@ class QuadWalkController:
             self.mode, self.message = "walk", "velocity command"
 
     def status(self) -> dict:
-        """{"mode": "stand"|"walk"|"done"|"fallen", "message", "goal_error_m", "heading_error_deg" (None without
-        a goal / final yaw), "footsteps": [] (a trot has no footstep plan), "support": "all"|"FL+RR"|"FR+RL",
+        """{"mode": "stand"|"walk"|"done"|"fallen", "message", "goal_error_m", "heading_error_deg" (both None without
+        a goal; heading 0.0 without a final yaw), "recovery_steps": 0, "terrain": False, "footsteps_z": [],
+        "footsteps": [] (a trot has no footstep plan), "support": "all"|"FL+RR"|"FR+RL",
         "recovering": bool (trotting on the spot after a push),
         "speed": m/s, "gait_phase": 0..1 (None while standing), "command": [vx, vy, wz]}"""
         has_goal = self.goal_xy is not None
@@ -330,9 +331,9 @@ class QuadWalkController:
             support = "FR+RL" if self._swing[0] else "FL+RR"
         return {"mode": self.mode, "message": self.message, "footsteps": [], "support": support,
                 "goal_error_m": self.goal_err if has_goal else None,
-                "heading_error_deg": (math.degrees(self.yaw_err)
-                                      if has_goal and self._final_yaw is not None else None),
-                "recovering": self._recover > 0.0, "speed": self.speed, "gait_phase": self.phase if self._gait else None,
+                "heading_error_deg": math.degrees(self.yaw_err) if has_goal else None,
+                "recovering": self._recover > 0.0, "recovery_steps": 0, "terrain": False, "footsteps_z": [],
+                "speed": self.speed, "gait_phase": self.phase if self._gait else None,
                 "command": list(self.cmd)}
 
     # ------------------------------------------------------------------ control
