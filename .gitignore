@@ -18,10 +18,23 @@ runs/rl_walker/*
 !runs/rl_walker/eval.json
 !runs/rl_walker/*.py
 MUJOCO_LOG.TXT
-.claude/
 robots/
 dist/
 build/
 /SimulaticsStudio.exe
 /SimulaticsStudio.version
 /SimulaticsStudio.part
+
+# AI-assistant files: kept on the local machine only
+.claude/
+CLAUDE.md
+CLAUDE.local.md
+**/CLAUDE.md
+AGENTS.md
+GEMINI.md
+.cursor/
+.cursorrules
+.github/copilot-instructions.md
+.aider*
+.mcp.json
+docs/superpowers/
