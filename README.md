@@ -507,3 +507,23 @@ docs/ROS2.md               using the bridge with ROS 2
 
 MIT (`LICENSE`). Dependencies are installed separately under their own permissive licences; see
 `THIRD_PARTY_NOTICES.md`.
+
+## Disclaimer
+
+Simulatics is an independent, standalone project written by one person. It is not affiliated with,
+associated with, sponsored by or endorsed by any university, research lab, company, robot maker or other
+software project, including those whose software it uses or whose published papers it cites.
+
+- **Names and trademarks.** Product, company, software and institution names (for example MuJoCo, ROS 2, Qt,
+  Claude, Windows, and the robot models in the robot library) are trademarks or names of their respective
+  owners. They are used here only to identify compatible software, dependencies and data sources, or to give
+  the credit their licences require; this does not suggest any relationship or endorsement.
+- **Licences.** Simulatics does not bundle third-party code. Dependencies are installed from their own
+  distributions under their own licences, downloaded robot models keep their own licence files, and the
+  motion-capture clips stay under the terms of their source, whose required acknowledgment is reproduced in
+  `THIRD_PARTY_NOTICES.md`. If you believe something here does not respect a licence or a trademark, please
+  open an issue and it will be corrected.
+- **Papers.** Methods are cited by author and year. The implementations are original code written from the
+  published descriptions; citing a paper does not mean its authors are involved with this project.
+- **No warranty.** The software is provided as is (see `LICENSE`). It is a simulator for experiments, not a
+  safety-rated controller for real robots.

@@ -1,5 +1,9 @@
 # Third-party software
 
+> Simulatics is an independent project, not affiliated with or endorsed by any of the projects, companies or
+> institutions named below. Their names appear only to identify what Simulatics depends on and to give the
+> attribution their licences require; all names and trademarks belong to their owners.
+
 Simulatics is MIT-licensed (see `LICENSE`), except the motion-capture clips described below. The source tree does not bundle any third-party code: the packages below are
 installed separately by `pip` from their own distributions, under their own licences, and three.js is loaded
 by the browser from a CDN. This file records what the project depends on and why the MIT licence is
